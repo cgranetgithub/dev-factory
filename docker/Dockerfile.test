@@ -1,0 +1,19 @@
+FROM python:3.11-slim
+
+# Install QA tools
+RUN pip install --no-cache-dir \
+    ruff>=0.4.0 \
+    mypy>=1.10.0 \
+    bandit>=1.7.8 \
+    pytest>=8.0.0 \
+    pytest-cov>=5.0.0
+
+# Install the project in the container at runtime via volume mount
+# The project is mounted at /workspace
+
+WORKDIR /workspace
+
+# Install project dependencies if pyproject.toml or requirements.txt exists
+# This runs at container start, not at image build time
+CMD ["sh", "-c", \
+    "pip install -e . --quiet 2>/dev/null || pip install -r requirements.txt --quiet 2>/dev/null || true"]
