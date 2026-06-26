@@ -12,7 +12,8 @@ It runs entirely on local LLMs served by Ollama.
 devfactory/
 ├── devfactory/          # Main package
 │   ├── agents/          # Agent implementations (analyst, developer, qa, reviewer)
-│   ├── github/          # GitHub integration (poller, git_ops, pr, review)
+│   ├── qa/              # Docker QA runner (ruff, mypy, bandit, pytest)
+│   ├── github/          # GitHub integration (poller, git_ops, pr, review, issues)
 │   ├── kb/              # Knowledge base (SQLite, scorer, dashboard)
 │   ├── models/          # LLM client, router, registry, retry
 │   ├── config.py        # Settings (pydantic-settings, reads .env)
@@ -100,6 +101,10 @@ Poller detects label ready-for-dev
 
 ## Style guide
 
+- **Language: everything in English** — code, identifiers, comments, docstrings,
+  commit messages, and docs. This project is intended to be open-sourced, so it
+  does **not** follow the French-comments convention from the shared
+  `/home/charles/Projects/CLAUDE.md`; that rule is overridden here.
 - Max line length: **100 characters** (ruff enforced).
 - Imports: stdlib → third-party → devfactory (ruff isort enforced).
 - Logging: always use `logger = logging.getLogger(__name__)`, never `print()`.

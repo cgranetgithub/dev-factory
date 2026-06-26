@@ -15,6 +15,7 @@ from devfactory.github.issues import (
     fetch_ready_issues,
     mark_error,
     mark_in_progress,
+    mark_qa_failed,
     mark_ready_for_review,
 )
 from devfactory.kb.database import db
@@ -64,7 +65,7 @@ class Poller:
         # Mark on GitHub immediately to prevent double-pickup
         mark_in_progress(self.repo, issue.number)
 
-        from devfactory.orchestrator import Pipeline
+        from devfactory.orchestrator import Pipeline, QAFailedError
 
         pipeline = Pipeline()
 
@@ -75,6 +76,10 @@ class Poller:
                 console.print(f"[bold green]✓ PR ready:[/] {ctx.pr_url}")
             else:
                 logger.warning(f"[poller] pipeline done for #{issue.number} but no PR URL")
+        except QAFailedError as e:
+            # Code produced but QA never passed after all retries → dedicated label
+            mark_qa_failed(self.repo, issue.number, str(e))
+            console.print(f"[bold yellow]✗ QA failed on #{issue.number}:[/] {e}")
         except Exception as e:
             mark_error(self.repo, issue.number, str(e))
             console.print(f"[bold red]✗ Error on #{issue.number}:[/] {e}")

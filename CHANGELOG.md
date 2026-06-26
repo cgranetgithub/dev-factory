@@ -5,7 +5,7 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [0.1.0] — 2024-06-22
+## [0.1.0] — 2026-06-22
 
 ### Initial release
 
@@ -33,7 +33,7 @@ This project follows [Semantic Versioning](https://semver.org/).
 - PR creation with structured body: acceptance criteria checkboxes, QA summary, model assignments
 - Inline GitHub PR Reviews with diff-position mapping
 - Automated label management: `devfactory:in-progress`, `devfactory:ready-for-review`,
-  `devfactory:error`
+  `devfactory:qa-failed`, `devfactory:error`
 
 **Knowledge base**
 - SQLite schema: `models`, `tasks`, `executions`, `scores`

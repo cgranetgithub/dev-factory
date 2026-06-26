@@ -135,20 +135,24 @@ This enables A/B comparisons across many pipeline runs without any manual config
 
 ## Installation
 
+> Uses [`uv`](https://github.com/astral-sh/uv) for environment and dependency
+> management (some systems ship Python without the `venv` module). With `uv`
+> installed, the steps below work out of the box.
+
 ```bash
 # Clone the repository
 git clone https://github.com/your-org/devfactory.git
 cd devfactory
 
-# Create a virtual environment
-python -m venv .venv
+# Create a virtual environment with uv (recommended)
+uv venv .venv
 source .venv/bin/activate      # Windows: .venv\Scripts\activate
 
 # Install in editable mode
-pip install -e .
+uv pip install -e .
 
 # For development (includes ruff, mypy, pytest)
-pip install -e ".[dev]"
+uv pip install -e ".[dev]"
 ```
 
 ---
@@ -317,8 +321,10 @@ devfactory/
 │   │   ├── base.py          # BaseAgent: model selection, prompt loading, LLM call
 │   │   ├── analyst.py       # Issue → TaskSpec (JSON)
 │   │   ├── developer.py     # TaskSpec → code files
-│   │   ├── qa.py            # Orchestrates Docker QA runner
+│   │   ├── qa.py            # Orchestrates the Docker QA runner
 │   │   └── reviewer.py      # Diff + QA → inline GitHub review
+│   ├── qa/
+│   │   └── runner.py        # Docker QA execution (ruff/mypy/bandit/pytest)
 │   ├── github/
 │   │   ├── client.py        # Lazy PyGitHub singleton
 │   │   ├── git_ops.py       # Clone, branch, commit, push (GitPython)
@@ -360,6 +366,8 @@ devfactory/
 ## Roadmap
 
 - [ ] **vLLM backend** — drop-in replacement for Ollama with better concurrency
+- [ ] **Optional cloud model** — opt-in fallback to a frontier API for hard tasks
+      (off by default; DevFactory stays fully local unless you enable it)
 - [ ] **Parallel pipeline** — run multiple issues concurrently
 - [ ] **Web dashboard** — visualise KB stats and pipeline runs in the browser
 - [ ] **Integration tests** — end-to-end tests against a test GitHub repository

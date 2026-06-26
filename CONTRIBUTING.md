@@ -21,12 +21,12 @@ workflow, coding standards, and how to get your changes merged.
 git clone https://github.com/your-org/devfactory.git
 cd devfactory
 
-# Create a virtual environment
-python -m venv .venv
+# Create a virtual environment with uv (recommended)
+uv venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 
 # Install in editable mode with dev tools
-pip install -e ".[dev]"
+uv pip install -e ".[dev]"
 
 # Copy and fill in environment variables
 cp .env.example .env
