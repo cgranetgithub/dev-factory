@@ -23,6 +23,14 @@ from devfactory.kb.scorer import scorer
 logger = logging.getLogger(__name__)
 
 
+class QAFailedError(RuntimeError):
+    """Raised when the Dev↔QA loop has exhausted all its attempts.
+
+    Distinct from a generic error: the poller catches it specifically to apply
+    the ``devfactory:qa-failed`` label instead of ``devfactory:error``.
+    """
+
+
 class Pipeline:
     def __init__(self):
         from devfactory.agents.analyst import AnalystAgent
@@ -74,6 +82,12 @@ class Pipeline:
             )
             logger.info(f"[pipeline] done — PR: {ctx.pr_url}")
 
+        except QAFailedError:
+            # The "qa_failed" status was already set inside the Dev↔QA loop;
+            # do not overwrite it with "error". The poller applies the right label.
+            logger.warning(f"[pipeline] QA failed on #{issue.number} (retries exhausted)")
+            raise
+
         except Exception as e:
             db.update_task(task_id, status="error")
             logger.error(f"[pipeline] failed on #{issue.number}: {e}", exc_info=True)
@@ -112,7 +126,7 @@ class Pipeline:
 
             if ctx.qa_attempts >= max_retries:
                 db.update_task(task_id, status="qa_failed")
-                raise RuntimeError(
+                raise QAFailedError(
                     f"QA failed after {max_retries} attempt(s) on issue #{ctx.issue.number}.\n"
                     f"Last report:\n{ctx.qa_report.summary if ctx.qa_report else 'N/A'}"
                 )

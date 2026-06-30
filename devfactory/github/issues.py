@@ -69,6 +69,24 @@ def mark_ready_for_review(repo: str, issue_number: int, pr_url: str):
     logger.info(f"[issues] #{issue_number} marked ready-for-review")
 
 
+def mark_qa_failed(repo: str, issue_number: int, report: str):
+    """Swap in-progress → qa-failed and post the last QA report as a comment.
+
+    Called when the Dev↔QA loop has exhausted all its attempts: this case is
+    kept distinct from a generic crash (devfactory:error) so the human knows the
+    code was produced but does not pass QA.
+    """
+    raw = gh.get_issue(repo, issue_number)
+    _ensure_labels(repo)
+    try:
+        raw.remove_from_labels(LABEL_PROGRESS)
+    except Exception:
+        pass
+    raw.add_to_labels(LABEL_QA_FAILED)
+    raw.create_comment(f"**DevFactory — QA failed (retries exhausted):**\n\n{report[:2000]}")
+    logger.warning(f"[issues] #{issue_number} marked qa-failed")
+
+
 def mark_error(repo: str, issue_number: int, error: str):
     """Mark issue as errored and post comment."""
     raw = gh.get_issue(repo, issue_number)
