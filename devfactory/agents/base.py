@@ -42,10 +42,12 @@ class BaseAgent(ABC):
 
     def execute(self, ctx: PipelineContext) -> PipelineContext:
         """Entry point called by the orchestrator."""
-        self._model = self._forced_model or router.select(
-            role=self.role,
-            exclude=list(ctx.model_assignments.values()),
-        )
+        # Only exclude the model already used for THIS role in this run (e.g. the
+        # first reviewer), so the two reviewers differ — without starving a role
+        # whose model pool overlaps models already taken by earlier roles.
+        already_used = ctx.model_assignments.get(self.role)
+        exclude = [already_used] if already_used else None
+        self._model = self._forced_model or router.select(role=self.role, exclude=exclude)
         ctx.model_assignments[self.role] = self._model.name
         logger.info(f"[{self.role}] starting with model={self._model.name}")
 
