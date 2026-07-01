@@ -25,6 +25,12 @@ METRICS_ORDER = [
     "review_quality",
 ]
 
+# Metrics that are 0.0–1.0 quality scores (higher = better) and may be averaged
+# into the leaderboard ranking. Diagnostic counts such as "retry_count" are
+# recorded for the per-role breakdown but must NOT be averaged into the ranking,
+# otherwise a perfect run (retry_count == 0) wrongly drags a model's score down.
+SCORE_METRICS = frozenset(METRICS_ORDER)
+
 
 def print_dashboard(db: Database, role_filter: str | None = None, metric_filter: str | None = None):
     """Full stats dashboard."""
@@ -66,24 +72,38 @@ def print_dashboard(db: Database, role_filter: str | None = None, metric_filter:
         console.print()
 
 
-def _build_leaderboard(
+def _rank_models(
     rows: list[dict], role_filter: str | None, metric_filter: str | None
-) -> Table:
-    """Overall model ranking by average score across all metrics."""
-    # Aggregate: model → avg score across all metrics and roles
+) -> list[tuple[str, float, int]]:
+    """Rank models by average quality score.
+
+    Returns ``(model, avg_score, data_points)`` tuples, best first. Only 0.0–1.0
+    quality metrics (``SCORE_METRICS``) are averaged; diagnostic counts such as
+    ``retry_count`` are ignored so a clean run does not drag a model down.
+    """
     scores: dict[str, list[float]] = {}
     for row in rows:
         if role_filter and row.get("role") != role_filter:
             continue
         if metric_filter and row.get("metric") != metric_filter:
             continue
+        # Rank on quality scores only — skip diagnostic counts like retry_count.
+        if row.get("metric") not in SCORE_METRICS:
+            continue
         if row.get("avg_score") is not None:
             scores.setdefault(row["model"], []).append(row["avg_score"])
 
-    ranked = sorted(
+    return sorted(
         [(model, sum(vals) / len(vals), len(vals)) for model, vals in scores.items()],
         key=lambda x: -x[1],
     )
+
+
+def _build_leaderboard(
+    rows: list[dict], role_filter: str | None, metric_filter: str | None
+) -> Table:
+    """Overall model ranking by average quality score."""
+    ranked = _rank_models(rows, role_filter, metric_filter)
 
     table = Table(box=box.ROUNDED, show_lines=False)
     table.add_column("#", style="dim", width=3)
