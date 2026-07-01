@@ -1,0 +1,5 @@
+# Charles (@cgranetgithub) is the sole maintainer and the required reviewer for
+# every change. Listing him here makes GitHub request his review automatically
+# on every pull request, which pairs with the branch ruleset (1 approval required)
+# and per-PR auto-merge so GitHub merges only after he approves.
+* @cgranetgithub
