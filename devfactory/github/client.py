@@ -32,7 +32,7 @@ class GitHubClient:
         return self.get_repo(repo).get_issue(number=number)
 
     def get_authenticated_user(self) -> str:
-        return self._client().get_user().login
+        return str(self._client().get_user().login)
 
 
 # Lazy singleton

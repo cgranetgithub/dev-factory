@@ -89,7 +89,7 @@ def commit_changes(ctx: PipelineContext, attempt: int = 1) -> str:
     if not has_staged and not has_untracked:
         logger.warning("[git] nothing to commit — developer produced no file changes")
         if repo.head.is_valid():
-            return repo.head.commit.hexsha
+            return str(repo.head.commit.hexsha)
         return ""
 
     message = (
@@ -105,7 +105,7 @@ def commit_changes(ctx: PipelineContext, attempt: int = 1) -> str:
     sha = commit.hexsha[:8]
     logger.info(f"[git] committed {sha}")
     ctx.commits.append(sha)
-    return commit.hexsha
+    return str(commit.hexsha)
 
 
 def push_branch(ctx: PipelineContext):
@@ -127,7 +127,7 @@ def get_diff(ctx: PipelineContext) -> str:
     repo = git.Repo(workspace)
     default = _default_branch(repo)
     try:
-        diff = repo.git.diff(f"{default}...HEAD", "--stat", "-p", "--no-color")
+        diff: str = repo.git.diff(f"{default}...HEAD", "--stat", "-p", "--no-color")
         # Truncate to ~20K chars to fit in context
         if len(diff) > 20_000:
             diff = diff[:20_000] + "\n\n[... diff truncated for context limit ...]"
@@ -146,7 +146,7 @@ def _default_branch(repo: git.Repo) -> str:
         if "master" in branches:
             return "master"
         # Fall back to remote HEAD
-        ref = repo.remotes.origin.refs.HEAD.reference.name
+        ref: str = repo.remotes.origin.refs.HEAD.reference.name
         return ref.replace("origin/", "")
     except Exception:
         return "main"

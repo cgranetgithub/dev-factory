@@ -129,7 +129,7 @@ class Database:
                 (name, parameters_b, notes),
             )
             row = conn.execute("SELECT id FROM models WHERE name=?", (name,)).fetchone()
-            return row["id"]
+            return int(row["id"])
 
     def get_model_id(self, name: str) -> int | None:
         """Return the DB id for a model name, or None if not registered."""
@@ -146,7 +146,7 @@ class Database:
                 "INSERT INTO tasks (github_issue_id, repo) VALUES (?, ?)",
                 (github_issue_id, repo),
             )
-            return cur.lastrowid
+            return int(cur.lastrowid)
 
     def update_task(self, task_id: int, **kwargs):
         """
@@ -192,7 +192,7 @@ class Database:
                    VALUES (?, ?, ?, ?, ?, ?)""",
                 (task_id, model_id, agent_type, prompt_tokens, completion_tokens, duration_ms),
             )
-            return cur.lastrowid
+            return int(cur.lastrowid)
 
     # ── Scores ─────────────────────────────────────────────────────────────────
 

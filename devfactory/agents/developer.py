@@ -37,6 +37,9 @@ class DeveloperAgent(BaseAgent):
 
     def _build_user_prompt(self, ctx: PipelineContext) -> str:
         spec = ctx.task_spec
+        # run() guarantees the spec is set before we get here; assert narrows the
+        # Optional for the type checker.
+        assert spec is not None
         parts = [
             f"# Task: {ctx.issue.title}",
             f"\n## Summary\n{spec.summary}",
