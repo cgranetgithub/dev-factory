@@ -52,8 +52,13 @@ class QARunner:
             raw_output=json.dumps({"ruff": ruff, "mypy": mypy, "bandit": bandit, "pytest": pytest}),
         )
 
-    def _docker_run(self, repo_path: Path, cmd: str) -> tuple[str, int]:
-        """Run a command inside the test Docker container."""
+    def _docker_run(self, repo_path: Path, cmd: str, timeout: int = 120) -> tuple[str, int]:
+        """Run a command inside the test Docker container.
+
+        The repo is mounted read-only; ``timeout`` bounds the whole container run
+        (the pytest step passes a larger value because it installs the project
+        first — see :meth:`_run_pytest`).
+        """
         full_cmd = [
             "docker",
             "run",
@@ -67,12 +72,15 @@ class QARunner:
             "-c",
             cmd,
         ]
-        result = subprocess.run(full_cmd, capture_output=True, text=True, timeout=120)
+        result = subprocess.run(full_cmd, capture_output=True, text=True, timeout=timeout)
         return result.stdout + result.stderr, result.returncode
 
     def _run_ruff(self, repo_path: Path) -> dict:
+        # --no-cache: /workspace is read-only, so ruff cannot create its
+        # .ruff_cache there. Without this it crashes and the empty output is
+        # misread as "0 issues" (a false pass). No cache is fine for one-shot QA.
         output, code = self._docker_run(
-            repo_path, "ruff check . --output-format=json 2>/dev/null || true"
+            repo_path, "ruff check . --no-cache --output-format=json 2>/dev/null || true"
         )
         try:
             issues = json.loads(output) if output.strip().startswith("[") else []
@@ -81,7 +89,13 @@ class QARunner:
         return {"issues": issues, "returncode": code}
 
     def _run_mypy(self, repo_path: Path) -> dict:
-        output, code = self._docker_run(repo_path, "mypy . --ignore-missing-imports 2>&1 || true")
+        # --cache-dir in /tmp: /workspace is read-only, so mypy cannot write its
+        # default .mypy_cache there. Without this it crashes and reports no
+        # errors — another false pass hiding real type errors.
+        output, code = self._docker_run(
+            repo_path,
+            "mypy . --ignore-missing-imports --cache-dir=/tmp/mypy_cache 2>&1 || true",
+        )
         errors = [line for line in output.splitlines() if ": error:" in line]
         return {"errors": errors, "raw": output, "returncode": code}
 
@@ -106,7 +120,40 @@ class QARunner:
         return {"findings": results, "severity": top_severity, "returncode": code}
 
     def _run_pytest(self, repo_path: Path) -> dict:
-        output, code = self._docker_run(repo_path, "pytest --tb=short -q 2>&1 || true")
+        # The test container ships only the QA tools, not the project's runtime
+        # dependencies. Each tool runs in a fresh container, so we install the
+        # mounted project (which pulls its declared deps) in the SAME command
+        # that runs pytest — otherwise every `import <project>` fails at
+        # collection. A non-editable `pip install .` builds in a temp dir, so it
+        # works even though /workspace is mounted read-only.
+        # If setup fails we surface it explicitly instead of letting it look like
+        # a mysterious test failure.
+        # /workspace is mounted read-only, but `pip install .` needs to write
+        # <pkg>.egg-info into the source tree. Copy the repo into a writable temp
+        # dir inside the container, install + run pytest there. The read-only
+        # mount stays untouched (tests can't mutate the candidate checkout).
+        cmd = (
+            'D=$(mktemp -d); cp -r /workspace/. "$D"/ 2>/dev/null; cd "$D"; '
+            "if [ -f pyproject.toml ] || [ -f setup.py ]; then "
+            "pip install -q . 2>&1 || { echo '##DEVFACTORY_SETUP_FAILED##'; exit 0; }; "
+            "fi; "
+            "pytest --tb=short -q 2>&1 || true"
+        )
+        # Larger timeout than the other tools: this step also installs deps.
+        output, code = self._docker_run(repo_path, cmd, timeout=300)
+
+        if "##DEVFACTORY_SETUP_FAILED##" in output:
+            return {
+                "passed": 0,
+                "failed": 0,
+                "errors": [
+                    "QA environment setup failed: `pip install .` did not complete in "
+                    "the test container (check the project's dependencies build cleanly)."
+                ],
+                "raw": output,
+                "setup_failed": True,
+            }
+
         passed = failed = 0
         errors = []
         for line in output.splitlines():

@@ -1,0 +1,15 @@
+# Bandit configuration for DevFactory.
+#
+# These skips MIRROR the flake8-bandit (`S...`) rules already ignored in
+# pyproject.toml [tool.ruff.lint], with the same justifications. The standalone
+# `bandit` tool run by the QA runner does not read ruff's config, so without
+# this file it re-flags issues the project has already reviewed and accepted,
+# failing QA on known false positives.
+#
+#   B108 (S108): hardcoded /tmp default in config.py — overridable via the
+#                DEVFACTORY_WORKSPACE env var; not a real exposure.
+#   B608 (S608): SQL built by string formatting in database.py update_task() —
+#                only whitelisted column names are interpolated; values are
+#                passed as bound parameters.
+[bandit]
+skips = B108,B608
