@@ -22,27 +22,71 @@ class ModelMeta:
 # `devfactory models --sync` pulls every model listed here that is missing from
 # Ollama, and the router ignores (with an info log) any model not yet pulled.
 #
-# Policy: coding-specialised models, 14B parameters minimum. Smaller or general
-# models hallucinate APIs on precise, schema-bound edits, which is exactly the
-# kind of change this factory produces.
+# Policy: 14B parameters minimum, split into two families of three:
+#   * 3 coding-specialised models → the "developer" role writes code, where a
+#     model that hallucinates APIs on precise, schema-bound edits is useless.
+#   * 3 strong general models → the "analyst" role reasons about the issue and
+#     benefits from broad reasoning rather than pure code fluency.
+# The "reviewer" role draws from ALL six, so the two reviewers can pair a coder
+# with a generalist for genuinely different perspectives on the diff.
 #
-# Roles: "analyst", "developer", "qa", "reviewer"
+# Note: the "qa" role uses NO model — QAAgent runs deterministic Docker tools
+# (ruff/mypy/bandit/pytest), it never calls an LLM, so no model declares "qa".
+#
+# Roles: "analyst", "developer", "reviewer"
+
+# Coding-specialised models — developer (+ reviewer). Distinct families
+# (Qwen / Mistral / DeepSeek) for leaderboard and reviewer diversity.
+_CODING_ROLES = ["developer", "reviewer"]
+# General models — analyst (+ reviewer). Strongest locally-runnable variants of
+# the top open-weight families (the true GLM-4.7 / Qwen3 flagships are 200B+ and
+# do not fit on this host).
+_GENERAL_ROLES = ["analyst", "reviewer"]
 
 MODELS: list[ModelMeta] = [
+    # ── Coding-specialised (developer + reviewer) ──────────────────────────────
     ModelMeta(
-        name="qwen2.5-coder:14b",
-        parameters_b=14,
+        name="qwen3-coder:30b",
+        parameters_b=30,
         context_k=32,
-        roles=["analyst", "developer", "qa", "reviewer"],
-        notes="Coding-specialised, strong instruction following. Baseline for all roles.",
+        roles=_CODING_ROLES,
+        notes="Qwen3-generation code model (MoE). Newest and strongest Qwen coder.",
+    ),
+    ModelMeta(
+        name="codestral:22b",
+        parameters_b=22,
+        context_k=32,
+        roles=_CODING_ROLES,
+        notes="Mistral AI's dedicated code model. Different family from Qwen/DeepSeek.",
     ),
     ModelMeta(
         name="deepseek-coder-v2:16b",
         parameters_b=16,
         context_k=32,
-        roles=["analyst", "developer", "qa", "reviewer"],
-        notes="Coding-specialised, excellent code generation. Gives every role a 2-model "
-        "pool and two distinct reviewers.",
+        roles=_CODING_ROLES,
+        notes="DeepSeek code model, excellent code generation.",
+    ),
+    # ── General (analyst + reviewer) ───────────────────────────────────────────
+    ModelMeta(
+        name="glm-4.7-flash",
+        parameters_b=32,
+        context_k=32,
+        roles=_GENERAL_ROLES,
+        notes="Zhipu GLM-4.7 (flash/local variant). Strong general reasoning.",
+    ),
+    ModelMeta(
+        name="qwen3.6:35b-a3b",
+        parameters_b=35,
+        context_k=32,
+        roles=_GENERAL_ROLES,
+        notes="Qwen3.6 (MoE, 3B active). Latest Qwen general model, fast for its size.",
+    ),
+    ModelMeta(
+        name="gemma4:26b",
+        parameters_b=26,
+        context_k=32,
+        roles=_GENERAL_ROLES,
+        notes="Google Gemma 4. Reliable structured output for analyst/reviewer.",
     ),
 ]
 
