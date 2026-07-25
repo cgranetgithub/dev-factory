@@ -48,7 +48,7 @@ class OllamaClient:
         Send a chat request to Ollama and return a structured response.
 
         Args:
-            model:       Ollama model name (e.g. ``qwen2.5-coder:7b``).
+            model:       Ollama model name (e.g. ``qwen2.5-coder:14b``).
             messages:    OpenAI-style message list (role / content dicts).
             temperature: Sampling temperature (lower = more deterministic).
             max_tokens:  Maximum tokens to generate.
@@ -99,6 +99,31 @@ class OllamaClient:
     def is_model_available(self, model: str) -> bool:
         """Return True if ``model`` is pulled and available in Ollama."""
         return model in self.list_models()
+
+    def pull_model(self, model: str) -> None:
+        """Pull ``model`` into Ollama, blocking until the download completes.
+
+        Uses the ``/api/pull`` endpoint with ``stream=false`` so the request
+        returns only once Ollama reports a final status. Pulling multi-GB
+        weights can take minutes, hence the very long timeout.
+
+        Raises:
+            httpx.HTTPStatusError: On a non-2xx response.
+            RuntimeError:          If Ollama reports a non-success final status.
+        """
+        # Long timeout: with stream=false Ollama holds the connection for the
+        # whole download, which can take several minutes for multi-GB weights.
+        # One hour is a generous cap that still avoids hanging the CLI forever.
+        with httpx.Client(timeout=3600) as client:
+            resp = client.post(
+                f"{self.base_url}/api/pull",
+                json={"model": model, "stream": False},
+            )
+            resp.raise_for_status()
+            status = resp.json().get("status", "")
+        # Ollama returns {"status": "success"} when the pull is complete.
+        if status != "success":
+            raise RuntimeError(f"Ollama pull of {model!r} did not succeed: status={status!r}")
 
 
 # Default client instance
