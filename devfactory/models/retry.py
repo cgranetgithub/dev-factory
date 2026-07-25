@@ -63,7 +63,7 @@ def with_retry(
 
     def decorator(fn: F) -> F:
         @wraps(fn)
-        def wrapper(*args, **kwargs):  # type: ignore[return]
+        def wrapper(*args, **kwargs):
             last_exc: Exception | None = None
             current_delay = delay
 
@@ -88,4 +88,4 @@ def with_retry(
 
         return wrapper  # type: ignore[return-value]
 
-    return decorator  # type: ignore[return-value]
+    return decorator

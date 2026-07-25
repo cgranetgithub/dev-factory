@@ -32,16 +32,16 @@ class QAFailedError(RuntimeError):
 
 
 class Pipeline:
-    def __init__(self):
+    def __init__(self) -> None:
         from devfactory.agents.analyst import AnalystAgent
         from devfactory.agents.developer import DeveloperAgent
         from devfactory.agents.qa import QAAgent
         from devfactory.agents.reviewer import ReviewerAgent
 
-        self.analyst = AnalystAgent()
-        self.developer = DeveloperAgent()
-        self.qa = QAAgent()
-        self.reviewer = ReviewerAgent()
+        self.analyst: AnalystAgent = AnalystAgent()
+        self.developer: DeveloperAgent = DeveloperAgent()
+        self.qa: QAAgent = QAAgent()
+        self.reviewer: ReviewerAgent = ReviewerAgent()
 
     def run(self, issue: GitHubIssue) -> PipelineContext:
         ctx = PipelineContext(issue=issue)

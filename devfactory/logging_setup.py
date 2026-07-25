@@ -48,7 +48,9 @@ class JSONLinesHandler(logging.Handler):
                 "msg": record.getMessage(),
             }
             if record.exc_info:
-                entry["exc"] = self.formatException(record.exc_info)
+                # formatException lives on Formatter, not Handler — use a throwaway
+                # formatter to render the traceback.
+                entry["exc"] = logging.Formatter().formatException(record.exc_info)
             self._file.write(json.dumps(entry) + "\n")
             self._file.flush()
         except Exception:

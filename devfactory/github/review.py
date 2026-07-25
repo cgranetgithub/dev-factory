@@ -5,6 +5,7 @@ GitHub PR review posting — inline comments via GitHub Reviews API.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from github import GithubException
 from github.PullRequest import PullRequest
@@ -37,7 +38,9 @@ def post_review(ctx: PipelineContext, result: ReviewResult):
 
     # Build inline comments in GitHub's format
     # Each comment needs: path, position (line in diff), body
-    comments = _build_review_comments(pr, result.inline_comments)
+    # Typed as Any: PyGithub's stubs want ReviewComment objects, but create_review
+    # accepts these position-mapped dicts at runtime (stub versions disagree).
+    comments: Any = _build_review_comments(pr, result.inline_comments)
 
     body = _build_review_body(result)
 
