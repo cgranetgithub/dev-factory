@@ -68,7 +68,9 @@ def stats(
 
 @app.command()
 def models(
-    sync: bool = typer.Option(False, "--sync", help="Sync registry with live Ollama models"),
+    sync: bool = typer.Option(
+        False, "--sync", help="Pull every registered model that is missing from Ollama"
+    ),
 ):
     """List registered models and check Ollama availability."""
     from devfactory.models.client import ollama
@@ -81,7 +83,9 @@ def models(
         console.print("[yellow]⚠ Could not reach Ollama — showing registry only[/]")
 
     if sync:
-        _sync_models(available)
+        # The registry is the source of truth: pull whatever it declares but
+        # Ollama does not yet have, then refresh the availability set.
+        available = _sync_models(available)
 
     table = Table(title="Model Registry", show_lines=True)
     table.add_column("Model", style="cyan")
@@ -133,13 +137,38 @@ def logs(
     print_run_logs(issue_number=issue, last_only=last)
 
 
-def _sync_models(available: set[str]):
-    """Register all Ollama models in the DB."""
-    from devfactory.kb.database import db
+def _sync_models(available: set[str]) -> set[str]:
+    """Pull every registered model that Ollama does not have yet.
 
-    for name in available:
-        db.upsert_model(name)
-    console.print(f"[green]Synced {len(available)} model(s) to DB[/]")
+    The registry is the source of truth. Any model listed there but absent from
+    Ollama is pulled via the Ollama API; models already present are left as-is.
+    Returns the refreshed set of available model names so the caller can render
+    an up-to-date table.
+    """
+    from devfactory.models.client import ollama
+    from devfactory.models.registry import MODELS
+
+    missing = [m.name for m in MODELS if m.name not in available]
+    if not missing:
+        console.print("[green]✓ All registered models are already pulled in Ollama[/]")
+        return available
+
+    console.print(f"[bold]Pulling {len(missing)} missing model(s): {', '.join(missing)}[/]")
+    for name in missing:
+        console.print(f"  → pulling [cyan]{name}[/] (this can take a while)…")
+        try:
+            ollama.pull_model(name)
+            console.print(f"    [green]✓ {name} pulled[/]")
+        except Exception as e:
+            # Do not abort the whole sync on one failure: report and move on so
+            # the remaining models still get pulled.
+            console.print(f"    [red]✗ failed to pull {name}: {e}[/]")
+
+    # Re-list so the caller sees what actually made it into Ollama.
+    try:
+        return set(ollama.list_models())
+    except Exception:
+        return available
 
 
 def _run_init(repo: str):
@@ -177,7 +206,9 @@ def _run_init(repo: str):
         available = ollama.list_models()
         console.print(f"   [green]✓ Ollama running — {len(available)} model(s) available[/]")
         if not available:
-            console.print("   [yellow]  No models pulled yet. Run: ollama pull qwen2.5-coder:7b[/]")
+            console.print(
+                "   [yellow]  No models pulled yet. Run: devfactory models --sync[/]"
+            )
     except Exception as e:
         console.print(f"   [red]✗ Ollama not reachable: {e}[/]")
 

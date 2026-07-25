@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 @dataclass
 class ModelMeta:
-    name: str  # Ollama model name (e.g. "qwen2.5-coder:7b")
+    name: str  # Ollama model name (e.g. "qwen2.5-coder:14b")
     parameters_b: float  # Billion parameters (approx)
     context_k: int  # Context window in K tokens
     roles: list[str]  # Which agent roles this model can play
@@ -18,37 +18,31 @@ class ModelMeta:
 
 
 # ── Registry ──────────────────────────────────────────────────────────────────
-# Add your models here as you pull them.
+# Add your models here as you pull them. This registry is the source of truth:
+# `devfactory models --sync` pulls every model listed here that is missing from
+# Ollama, and the router ignores (with an info log) any model not yet pulled.
+#
+# Policy: coding-specialised models, 14B parameters minimum. Smaller or general
+# models hallucinate APIs on precise, schema-bound edits, which is exactly the
+# kind of change this factory produces.
+#
 # Roles: "analyst", "developer", "qa", "reviewer"
 
 MODELS: list[ModelMeta] = [
-    ModelMeta(
-        name="qwen2.5-coder:7b",
-        parameters_b=7,
-        context_k=32,
-        roles=["analyst", "developer", "qa", "reviewer"],
-        notes="Strong on code, good instruction following",
-    ),
     ModelMeta(
         name="qwen2.5-coder:14b",
         parameters_b=14,
         context_k=32,
         roles=["analyst", "developer", "qa", "reviewer"],
-        notes="More capable, heavier",
+        notes="Coding-specialised, strong instruction following. Baseline for all roles.",
     ),
     ModelMeta(
         name="deepseek-coder-v2:16b",
         parameters_b=16,
         context_k=32,
-        roles=["developer", "reviewer"],
-        notes="Excellent at code generation",
-    ),
-    ModelMeta(
-        name="mistral:7b",
-        parameters_b=7,
-        context_k=32,
-        roles=["analyst", "qa", "reviewer"],
-        notes="Good at reasoning and structured output",
+        roles=["analyst", "developer", "qa", "reviewer"],
+        notes="Coding-specialised, excellent code generation. Gives every role a 2-model "
+        "pool and two distinct reviewers.",
     ),
 ]
 

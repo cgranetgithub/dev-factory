@@ -73,7 +73,7 @@ class PipelineContext:
     # Tracking
     qa_attempts: int = 0
     model_assignments: dict[str, str] = field(default_factory=dict)
-    # {"analyst": "qwen2.5-coder:7b", "developer": "deepseek-coder-v2:16b", ...}
+    # {"analyst": "qwen2.5-coder:14b", "developer": "deepseek-coder-v2:16b", ...}
 
     # Execution log (for KB scoring)
     execution_log: list[dict[str, Any]] = field(default_factory=list)

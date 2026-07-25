@@ -10,7 +10,7 @@ import logging
 import random
 
 from devfactory.models.client import ollama
-from devfactory.models.registry import ModelMeta, get_models_for_role
+from devfactory.models.registry import MODELS, ModelMeta, get_models_for_role
 
 logger = logging.getLogger(__name__)
 
@@ -26,12 +26,28 @@ class ModelRouter:
             try:
                 self._available_cache = set(ollama.list_models())
                 logger.debug(f"Available models: {self._available_cache}")
+                self._warn_unavailable(self._available_cache)
             except Exception as e:
                 logger.warning(
                     f"Could not fetch Ollama model list: {e}. Skipping availability check."
                 )
                 self._available_cache = set()
         return self._available_cache
+
+    def _warn_unavailable(self, available: set[str]) -> None:
+        """Log an info message for registered models that are not pulled in Ollama.
+
+        These are silently skipped during selection; surfacing them here tells the
+        operator to run ``devfactory models --sync`` (or ``ollama pull``) instead of
+        wondering why a registered model is never chosen.
+        """
+        missing = [m.name for m in MODELS if m.name not in available]
+        if missing:
+            logger.info(
+                "Registered but not pulled in Ollama, skipping: %s. "
+                "Run `devfactory models --sync` to pull them.",
+                ", ".join(sorted(missing)),
+            )
 
     def select(self, role: str, exclude: list[str] | None = None) -> ModelMeta:
         """
