@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 
 class QAAgent(BaseAgent):
     role = "qa"
+    # QA runs the Docker tools (ruff/mypy/bandit/pytest) and never calls an LLM,
+    # so no model is selected for it and no "qa" execution is recorded.
+    requires_model = False
 
     def __init__(self):
         super().__init__()

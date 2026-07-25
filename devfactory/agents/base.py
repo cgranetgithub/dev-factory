@@ -30,6 +30,12 @@ class BaseAgent(ABC):
 
     role: str  # must be set by subclass
 
+    # Whether this agent needs a model selected before run(). Agents that do not
+    # call an LLM (e.g. the QA agent, which only runs deterministic Docker tools)
+    # set this to False so execute() skips router selection — otherwise it would
+    # fail on a role that no model declares.
+    requires_model: bool = True
+
     def __init__(self, model: ModelMeta | None = None):
         """
         Args:
@@ -42,14 +48,18 @@ class BaseAgent(ABC):
 
     def execute(self, ctx: PipelineContext) -> PipelineContext:
         """Entry point called by the orchestrator."""
-        # Only exclude the model already used for THIS role in this run (e.g. the
-        # first reviewer), so the two reviewers differ — without starving a role
-        # whose model pool overlaps models already taken by earlier roles.
-        already_used = ctx.model_assignments.get(self.role)
-        exclude = [already_used] if already_used else None
-        self._model = self._forced_model or router.select(role=self.role, exclude=exclude)
-        ctx.model_assignments[self.role] = self._model.name
-        logger.info(f"[{self.role}] starting with model={self._model.name}")
+        if self.requires_model:
+            # Only exclude the model already used for THIS role in this run (e.g. the
+            # first reviewer), so the two reviewers differ — without starving a role
+            # whose model pool overlaps models already taken by earlier roles.
+            already_used = ctx.model_assignments.get(self.role)
+            exclude = [already_used] if already_used else None
+            self._model = self._forced_model or router.select(role=self.role, exclude=exclude)
+            ctx.model_assignments[self.role] = self._model.name
+            logger.info(f"[{self.role}] starting with model={self._model.name}")
+        else:
+            # No LLM for this agent (e.g. QA runs deterministic Docker tools only).
+            logger.info(f"[{self.role}] starting (no LLM — deterministic tools)")
 
         updated_ctx = self.run(ctx)
 
