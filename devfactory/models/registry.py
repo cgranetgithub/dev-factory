@@ -68,7 +68,10 @@ MODELS: list[ModelMeta] = [
     ),
     # ── General (analyst + reviewer) ───────────────────────────────────────────
     ModelMeta(
-        name="glm-4.7-flash",
+        # Name must match `ollama list` exactly. This model has no explicit tag,
+        # so Ollama reports it as ":latest"; without that suffix the availability
+        # check fails and the router wrongly skips (and `--sync` re-pulls) it.
+        name="glm-4.7-flash:latest",
         parameters_b=32,
         context_k=32,
         roles=_GENERAL_ROLES,
