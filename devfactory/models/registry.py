@@ -22,21 +22,30 @@ class ModelMeta:
 # `devfactory models --sync` pulls every model listed here that is missing from
 # Ollama, and the router ignores (with an info log) any model not yet pulled.
 #
-# Policy: 14B parameters minimum, split into two families of three:
-#   * 3 coding-specialised models → the "developer" role writes code, where a
+# Policy: 20B parameters minimum, and every model must fit on the 24 GB card
+# (RTX 3090 Ti). Split into two families of three:
+#   * 3 models on the "developer"/coding side → this role writes code, where a
 #     model that hallucinates APIs on precise, schema-bound edits is useless.
+#     Only two dedicated coders survive the 20B floor (qwen3-coder, codestral),
+#     so the third slot is filled by a strong DENSE general model.
 #   * 3 strong general models → the "analyst" role reasons about the issue and
 #     benefits from broad reasoning rather than pure code fluency.
 # The "reviewer" role draws from ALL six, so the two reviewers can pair a coder
 # with a generalist for genuinely different perspectives on the diff.
+#
+# VRAM: Ollama loads one model at a time, so the constraint is per-model, not the
+# sum — each entry must fit on 24 GB with room left for the KV cache. Models near
+# ~23 GB on disk (e.g. qwen3.6:35b-a3b) are avoided: they leave too little for a
+# 32K context. Aim for ≤ ~20 GB on disk.
 #
 # Note: the "qa" role uses NO model — QAAgent runs deterministic Docker tools
 # (ruff/mypy/bandit/pytest), it never calls an LLM, so no model declares "qa".
 #
 # Roles: "analyst", "developer", "reviewer"
 
-# Coding-specialised models — developer (+ reviewer). Distinct families
-# (Qwen / Mistral / DeepSeek) for leaderboard and reviewer diversity.
+# Coding side — developer (+ reviewer). Two dedicated coders (Qwen / Mistral)
+# plus one dense general model, since no third dedicated coder clears the 20B
+# floor while fitting the card.
 _CODING_ROLES = ["developer", "reviewer"]
 # General models — analyst (+ reviewer). Strongest locally-runnable variants of
 # the top open-weight families (the true GLM-4.7 / Qwen3 flagships are 200B+ and
@@ -60,11 +69,15 @@ MODELS: list[ModelMeta] = [
         notes="Mistral AI's dedicated code model. Different family from Qwen/DeepSeek.",
     ),
     ModelMeta(
-        name="deepseek-coder-v2:16b",
-        parameters_b=16,
+        # Not a dedicated coder: a strong DENSE general model filling the third
+        # coding slot (no dedicated coder ≥20B remains after the 16B drop). Dense
+        # (not MoE) for per-token quality on precise codegen, and a plain instruct
+        # model (no reasoning `<think>` blocks) so the developer output stays clean.
+        name="qwen2.5:32b",
+        parameters_b=32,
         context_k=32,
         roles=_CODING_ROLES,
-        notes="DeepSeek code model, excellent code generation.",
+        notes="Qwen2.5 32B dense general model, used as the developer/coding fallback.",
     ),
     # ── General (analyst + reviewer) ───────────────────────────────────────────
     ModelMeta(
@@ -78,11 +91,15 @@ MODELS: list[ModelMeta] = [
         notes="Zhipu GLM-4.7 (flash/local variant). Strong general reasoning.",
     ),
     ModelMeta(
-        name="qwen3.6:35b-a3b",
-        parameters_b=35,
+        # Dense 27B rather than the 35b-a3b MoE variant: the MoE weighs ~23 GB on
+        # disk, leaving barely ~1 GB of the 24 GB card for the KV cache — too tight
+        # at 32K context (spill/OOM risk). 27B dense (~17 GB) keeps a comfortable
+        # context margin while staying above the 20B floor.
+        name="qwen3.6:27b",
+        parameters_b=27,
         context_k=32,
         roles=_GENERAL_ROLES,
-        notes="Qwen3.6 (MoE, 3B active). Latest Qwen general model, fast for its size.",
+        notes="Qwen3.6 27B dense. Latest Qwen general model, safe VRAM margin.",
     ),
     ModelMeta(
         name="gemma4:26b",
