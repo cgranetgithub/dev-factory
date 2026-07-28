@@ -14,6 +14,13 @@ class ModelMeta:
     parameters_b: float  # Billion parameters (approx)
     context_k: int  # Context window in K tokens
     roles: list[str]  # Which agent roles this model can play
+    # Whether the model exposes tool/function calling in Ollama. Required by the
+    # "opencode" developer backend (its agentic loop drives Edit/Write/run tools).
+    # A model without it still works for plain-chat roles (analyst, reviewer) and
+    # the single-shot "ollama" developer backend, but is filtered out of the
+    # opencode developer pool. Check with `ollama show <model>` — the
+    # "Capabilities" section must list "tools".
+    supports_tools: bool = True
     notes: str = ""
 
 
@@ -26,8 +33,9 @@ class ModelMeta:
 # (RTX 3090 Ti). Split into two families of three:
 #   * 3 models on the "developer"/coding side → this role writes code, where a
 #     model that hallucinates APIs on precise, schema-bound edits is useless.
-#     Only two dedicated coders survive the 20B floor (qwen3-coder, codestral),
-#     so the third slot is filled by a strong DENSE general model.
+#     Only two dedicated coders survive the 20B floor (qwen3-coder, devstral),
+#     so the third slot is filled by a strong DENSE general model. All three are
+#     tool-capable, a hard requirement for the "opencode" developer backend.
 #   * 3 strong general models → the "analyst" role reasons about the issue and
 #     benefits from broad reasoning rather than pure code fluency.
 # The "reviewer" role draws from ALL six, so the two reviewers can pair a coder
@@ -43,9 +51,9 @@ class ModelMeta:
 #
 # Roles: "analyst", "developer", "reviewer"
 
-# Coding side — developer (+ reviewer). Two dedicated coders (Qwen / Mistral)
-# plus one dense general model, since no third dedicated coder clears the 20B
-# floor while fitting the card.
+# Coding side — developer (+ reviewer). Two dedicated coders (Qwen qwen3-coder /
+# Mistral devstral) plus one dense general model, since no third dedicated coder
+# clears the 20B floor while fitting the card.
 _CODING_ROLES = ["developer", "reviewer"]
 # General models — analyst (+ reviewer). Strongest locally-runnable variants of
 # the top open-weight families (the true GLM-4.7 / Qwen3 flagships are 200B+ and
@@ -62,11 +70,15 @@ MODELS: list[ModelMeta] = [
         notes="Qwen3-generation code model (MoE). Newest and strongest Qwen coder.",
     ),
     ModelMeta(
-        name="codestral:22b",
-        parameters_b=22,
+        name="devstral:24b",
+        parameters_b=24,
         context_k=32,
         roles=_CODING_ROLES,
-        notes="Mistral AI's dedicated code model. Different family from Qwen/DeepSeek.",
+        # Mistral's agentic coding model (OpenHands scaffold). It exposes tool
+        # calling in Ollama, so it drives the "opencode" developer backend —
+        # unlike codestral, which it replaces here. Keeps a non-Qwen family in the
+        # coding pool for genuinely different reviews.
+        notes="Mistral AI Devstral Small. Agentic code model, tool-capable.",
     ),
     ModelMeta(
         # Not a dedicated coder: a strong DENSE general model filling the third

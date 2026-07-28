@@ -36,6 +36,16 @@ class BaseAgent(ABC):
     # fail on a role that no model declares.
     requires_model: bool = True
 
+    def requires_tool_calling(self) -> bool:
+        """Whether this agent needs a tool-calling model for its selected backend.
+
+        Default False (plain-chat agents). The developer agent overrides this to
+        True when its "opencode" backend is active, so the router only picks
+        tool-capable models. Kept as a method (not a class attribute) because the
+        answer can depend on runtime settings, not just the agent class.
+        """
+        return False
+
     def __init__(self, model: ModelMeta | None = None):
         """
         Args:
@@ -54,7 +64,9 @@ class BaseAgent(ABC):
             # whose model pool overlaps models already taken by earlier roles.
             already_used = ctx.model_assignments.get(self.role)
             exclude = [already_used] if already_used else None
-            self._model = self._forced_model or router.select(role=self.role, exclude=exclude)
+            self._model = self._forced_model or router.select(
+                role=self.role, exclude=exclude, require_tools=self.requires_tool_calling()
+            )
             ctx.model_assignments[self.role] = self._model.name
             logger.info(f"[{self.role}] starting with model={self._model.name}")
         else:
