@@ -126,6 +126,17 @@ def test_opencode_backend_invokes_cli_and_logs_execution(monkeypatch, tmp_path):
     assert dev_execs[0]["model"] == "qwen3-coder:30b"
 
 
+def test_requires_tool_calling_tracks_backend(monkeypatch):
+    """The developer demands a tool-capable model only for the opencode backend."""
+    agent = DeveloperAgent()
+
+    monkeypatch.setattr(settings, "dev_backend", "opencode")
+    assert agent.requires_tool_calling() is True
+
+    monkeypatch.setattr(settings, "dev_backend", "ollama")
+    assert agent.requires_tool_calling() is False
+
+
 def test_opencode_backend_raises_on_nonzero_exit(monkeypatch, tmp_path):
     """A failed opencode run raises RuntimeError so the pipeline can react."""
     monkeypatch.setattr(settings, "workspace", tmp_path)

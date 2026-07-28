@@ -49,13 +49,20 @@ class ModelRouter:
                 ", ".join(sorted(missing)),
             )
 
-    def select(self, role: str, exclude: list[str] | None = None) -> ModelMeta:
+    def select(
+        self,
+        role: str,
+        exclude: list[str] | None = None,
+        require_tools: bool = False,
+    ) -> ModelMeta:
         """
         Select a random model for the given role.
 
         Args:
             role: Agent role ("analyst", "developer", "qa", "reviewer")
             exclude: Model names to exclude (e.g. already used in this pipeline run)
+            require_tools: If True, only consider models that expose tool/function
+                calling (needed by the "opencode" developer backend).
 
         Returns:
             Selected ModelMeta
@@ -71,6 +78,10 @@ class ModelRouter:
         if exclude:
             candidates = [m for m in candidates if m.name not in exclude]
 
+        # Drop models that cannot do tool calling when the caller needs it.
+        if require_tools:
+            candidates = [m for m in candidates if m.supports_tools]
+
         if self._verify:
             available = self._get_available()
             if available:  # only filter if we got a valid list
@@ -79,7 +90,8 @@ class ModelRouter:
         if not candidates:
             raise RuntimeError(
                 f"No available models for role '{role}' "
-                f"(excluded: {exclude}, check Ollama and registry)"
+                f"(excluded: {exclude}, require_tools={require_tools}, "
+                "check Ollama and registry)"
             )
 
         selected = random.choice(candidates)

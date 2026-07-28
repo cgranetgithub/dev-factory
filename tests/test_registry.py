@@ -58,3 +58,26 @@ def test_router_no_candidates_raises():
     router = ModelRouter(verify_availability=False)
     with pytest.raises(RuntimeError, match="No models registered"):
         router.select("nonexistent_role")
+
+
+def test_router_require_tools_only_selects_tool_capable():
+    """With require_tools=True, every selection supports tool calling."""
+    router = ModelRouter(verify_availability=False)
+    # Sample repeatedly since selection is random — a non-tool model must never
+    # slip through the filter.
+    for _ in range(30):
+        model = router.select("developer", require_tools=True)
+        assert model.supports_tools, f"{model.name} was selected but has no tool support"
+
+
+def test_router_require_tools_excludes_non_tool_model():
+    """A developer model without tool support is filtered out by require_tools."""
+    devs = get_models_for_role("developer")
+    non_tool = [m for m in devs if not m.supports_tools]
+    if not non_tool:
+        pytest.skip("No non-tool developer model in registry to exercise the filter")
+
+    router = ModelRouter(verify_availability=False)
+    selected_names = {router.select("developer", require_tools=True).name for _ in range(30)}
+    for m in non_tool:
+        assert m.name not in selected_names
