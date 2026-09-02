@@ -137,6 +137,15 @@ def test_requires_agentic_loop_tracks_backend(monkeypatch):
     assert agent.requires_agentic_loop() is False
 
 
+def test_developer_does_not_avoid_repeated_model():
+    """The developer must reuse its model across QA retries (no exclusion), while
+    the reviewer opts into excluding its first-pass model."""
+    from devfactory.agents.reviewer import ReviewerAgent
+
+    assert DeveloperAgent().avoid_repeated_model is False
+    assert ReviewerAgent().avoid_repeated_model is True
+
+
 def test_opencode_backend_raises_on_nonzero_exit(monkeypatch, tmp_path):
     """A failed opencode run raises RuntimeError so the pipeline can react."""
     monkeypatch.setattr(settings, "workspace", tmp_path)

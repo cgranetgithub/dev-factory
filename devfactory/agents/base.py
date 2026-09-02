@@ -36,6 +36,14 @@ class BaseAgent(ABC):
     # fail on a role that no model declares.
     requires_model: bool = True
 
+    # Whether to avoid re-picking the model already used for this role in this run.
+    # Only the reviewer sets this True, so its two passes get different models for
+    # genuinely different perspectives. It must stay False for agents that run more
+    # than once for other reasons — notably the developer, which re-executes on
+    # each QA retry: excluding its previous model would starve a single-model pool
+    # (e.g. the opencode backend, pinned to the one agentic-loop driver).
+    avoid_repeated_model: bool = False
+
     def requires_agentic_loop(self) -> bool:
         """Whether this agent needs a model that drives the opencode agentic loop.
 
@@ -59,11 +67,14 @@ class BaseAgent(ABC):
     def execute(self, ctx: PipelineContext) -> PipelineContext:
         """Entry point called by the orchestrator."""
         if self.requires_model:
-            # Only exclude the model already used for THIS role in this run (e.g. the
-            # first reviewer), so the two reviewers differ — without starving a role
-            # whose model pool overlaps models already taken by earlier roles.
-            already_used = ctx.model_assignments.get(self.role)
-            exclude = [already_used] if already_used else None
+            # For agents that opt in (the reviewer), exclude the model already used
+            # for THIS role in this run so the two passes differ. Off by default —
+            # the developer re-executes on each QA retry and must be free to reuse
+            # its model (its pool may hold a single eligible driver).
+            exclude = None
+            if self.avoid_repeated_model:
+                already_used = ctx.model_assignments.get(self.role)
+                exclude = [already_used] if already_used else None
             self._model = self._forced_model or router.select(
                 role=self.role, exclude=exclude, require_agentic_loop=self.requires_agentic_loop()
             )
