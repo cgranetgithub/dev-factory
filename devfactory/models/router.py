@@ -53,7 +53,7 @@ class ModelRouter:
         self,
         role: str,
         exclude: list[str] | None = None,
-        require_tools: bool = False,
+        require_agentic_loop: bool = False,
     ) -> ModelMeta:
         """
         Select a random model for the given role.
@@ -61,8 +61,8 @@ class ModelRouter:
         Args:
             role: Agent role ("analyst", "developer", "qa", "reviewer")
             exclude: Model names to exclude (e.g. already used in this pipeline run)
-            require_tools: If True, only consider models that expose tool/function
-                calling (needed by the "opencode" developer backend).
+            require_agentic_loop: If True, only consider models verified to drive
+                the opencode agentic loop (needed by the "opencode" dev backend).
 
         Returns:
             Selected ModelMeta
@@ -78,9 +78,10 @@ class ModelRouter:
         if exclude:
             candidates = [m for m in candidates if m.name not in exclude]
 
-        # Drop models that cannot do tool calling when the caller needs it.
-        if require_tools:
-            candidates = [m for m in candidates if m.supports_tools]
+        # Keep only models that actually drive the agentic loop when the caller
+        # needs it (opencode backend); tool-capable-but-prose models are dropped.
+        if require_agentic_loop:
+            candidates = [m for m in candidates if m.drives_agentic_loop]
 
         if self._verify:
             available = self._get_available()
@@ -90,7 +91,7 @@ class ModelRouter:
         if not candidates:
             raise RuntimeError(
                 f"No available models for role '{role}' "
-                f"(excluded: {exclude}, require_tools={require_tools}, "
+                f"(excluded: {exclude}, require_agentic_loop={require_agentic_loop}, "
                 "check Ollama and registry)"
             )
 

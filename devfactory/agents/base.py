@@ -36,13 +36,13 @@ class BaseAgent(ABC):
     # fail on a role that no model declares.
     requires_model: bool = True
 
-    def requires_tool_calling(self) -> bool:
-        """Whether this agent needs a tool-calling model for its selected backend.
+    def requires_agentic_loop(self) -> bool:
+        """Whether this agent needs a model that drives the opencode agentic loop.
 
         Default False (plain-chat agents). The developer agent overrides this to
-        True when its "opencode" backend is active, so the router only picks
-        tool-capable models. Kept as a method (not a class attribute) because the
-        answer can depend on runtime settings, not just the agent class.
+        True when its "opencode" backend is active, so the router only picks models
+        verified to drive the tool loop. Kept as a method (not a class attribute)
+        because the answer can depend on runtime settings, not just the agent class.
         """
         return False
 
@@ -65,7 +65,7 @@ class BaseAgent(ABC):
             already_used = ctx.model_assignments.get(self.role)
             exclude = [already_used] if already_used else None
             self._model = self._forced_model or router.select(
-                role=self.role, exclude=exclude, require_tools=self.requires_tool_calling()
+                role=self.role, exclude=exclude, require_agentic_loop=self.requires_agentic_loop()
             )
             ctx.model_assignments[self.role] = self._model.name
             logger.info(f"[{self.role}] starting with model={self._model.name}")
