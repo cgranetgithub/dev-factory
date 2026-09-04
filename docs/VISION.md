@@ -122,6 +122,66 @@ control that bounds its failure modes.
 
 ---
 
+## Verifying the controls — a declared control is not a control
+
+Every control above lives in a configuration that someone can change. Claiming
+"the reviewer cannot approve its own PR" is worthless unless we can show the guard rails
+were actually in place *for the whole period*, and that nobody quietly removed one.
+
+### What can and cannot drift
+
+| Layer | Example | Can it drift? |
+|---|---|---|
+| Platform invariant | GitHub refuses `APPROVE` / `REQUEST_CHANGES` on your own PR | **No** — hard-coded, not a setting; no org admin can disable it. But GitHub exposes no API field asserting it either, so it is evidenced by vendor documentation plus our own negative test. |
+| Repository configuration | Ruleset on `main`, required approvals, CODEOWNERS, bypass list, force-push protection, required status checks | **Yes** — anyone with admin can change it silently |
+| Identity & permissions | Who is a collaborator, at which role; whether the bot is admin | **Yes** |
+
+We do not need to *own* GitHub. We need the control configured, verified on a schedule,
+and every verification stored as evidence. SOC 2 Type II and ISO 27001 (clause 9.1,
+A.5.35 / A.5.36) do not ask "is the control on today" — they ask **"did it operate
+throughout the period"**. A screenshot proves nothing; a timestamped, archived,
+automated check proves a lot.
+
+### Baseline (recorded 2026-09-04, repo `cgranetgithub/dev-factory`)
+
+| Setting | Value | Assessment |
+|---|---|---|
+| Ruleset `PR`, enforcement | `active` on `~DEFAULT_BRANCH` | OK |
+| `required_approving_review_count` | `1` | OK |
+| `require_code_owner_review` | `true` | OK |
+| `deletion`, `non_fast_forward` | enforced | OK — no force-push, no branch deletion |
+| `bypass_actors` | `null` | OK — nobody bypasses, including the owner |
+| Collaborators | owner = admin, `bot-bobby` = write | OK — the bot cannot alter the ruleset |
+| `dismiss_stale_reviews_on_push` | `false` | **Gap** — an approval survives a later push, so auto-merge can merge unreviewed commits |
+| `require_last_push_approval` | `false` | **Gap** — same failure mode |
+| `required_status_checks` | none | **Gap** — "QA passed" is asserted by the audited pipeline, not enforced independently by the platform |
+
+The three gaps matter because the factory pushes as `bot-bobby` *after* a human approval
+can already exist on the PR. Closing them is repository-owner work (the bot has `write`,
+by design, and cannot change a ruleset).
+
+### The mechanism to build
+
+A `devfactory controls check` command that:
+
+- **snapshots** the enforced configuration through the API — ruleset and its rules,
+  `bypass_actors`, collaborators and their roles, CODEOWNERS content, required status checks;
+- **compares** it to an expected policy, versioned in the repository;
+- **records** each snapshot as an append-only, hash-chained, timestamped entry in the KB —
+  that series *is* the evidence of continuous operation;
+- **diffs** against the previous snapshot and raises any drift as a recorded event;
+- runs **at the start of every pipeline run and on a schedule** — otherwise evidence only
+  exists on days when work happened, and the gaps are visible to an auditor;
+- optionally **fails closed**: if the policy is not met, the pipeline refuses to open a PR.
+  That is the stronger control, and it is a policy decision per project.
+
+**Attribution limit, stated up front:** GitHub's `audit-log` API is Enterprise Cloud only.
+On a personal repository we can detect *that* a control changed and *when* (to the
+resolution of our polling interval), but not *by whom*. Clients needing attribution must
+host in an Enterprise org. Failing closed partly compensates for the missing attribution.
+
+---
+
 ## Roadmap
 
 Four phases. Each ships evidence an auditor can read, not only features.
@@ -134,9 +194,15 @@ Run the existing factory as a controlled, evidenced system.
 - Access control and secrets review; documented local-only data-residency posture
 - Formalise change management (already: branch → PR → CODEOWNERS → protected `main`)
 - Audit-grade run logs: every agent action captured immutably
+- **Control monitoring** — `devfactory controls check`: snapshot the enforced GitHub
+  configuration, compare it to a versioned expected policy, archive every check, alert on
+  drift, run it per pipeline run *and* on a schedule
+- Close the three baseline gaps: `dismiss_stale_reviews_on_push`,
+  `require_last_push_approval`, required status checks
 - Written policies: change management, access, incident response, model/vendor register
 
-**Exit evidence:** a change-management control operating with a complete, tamper-evident log.
+**Exit evidence:** a change-management control operating with a complete, tamper-evident
+log, plus an unbroken series of control-verification records covering the audit period.
 
 ### P1 — The traceability spine *(next)*
 
@@ -189,6 +255,9 @@ Add the medical-specific processes on top of the spine.
   [`devfactory/models/registry.py`](../devfactory/models/registry.py).
 - **Human-in-the-loop is not optional.** For Class B/C software a qualified person must
   verify and approve. Full autonomy is a low-risk-work story.
+- **We monitor the platform, we do not own it.** Control drift is *detected*, not
+  prevented, unless the pipeline fails closed — and on a non-Enterprise repository the
+  change cannot be attributed to a person. Say so before an auditor says it for you.
 
 ---
 

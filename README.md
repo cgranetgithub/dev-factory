@@ -441,6 +441,9 @@ The phased plan (P0 → P3) and its exit evidence live in [docs/VISION.md](docs/
 
 - [ ] **P0 — infosec foundation** — audit-grade immutable run logs, documented change
       management, access/secrets review, written policies *(SOC 2 · ISO 27001)*
+- [ ] **P0 — control monitoring** — `devfactory controls check`: snapshot the enforced
+      GitHub configuration, compare it to a versioned expected policy, archive every check
+      and alert on drift (a declared control is not a control until it is verified)
 - [ ] **P1 — traceability spine** — entity model + hash-chained record store + audit
       package export (issue → requirement → code → test → verification → review → release)
 - [ ] **P2 — gates, roles & sign-off** — enforced phase gates, recorded human approvals,
