@@ -15,6 +15,10 @@ This project follows [Semantic Versioning](https://semver.org/).
   the repository's enforced configuration (with three identified gaps), the planned
   `devfactory controls check`, and the attribution limit of a non-Enterprise repository
 
+**Verification**
+- `.github/workflows/ci.yml` — ruff, mypy, bandit and pytest re-run on GitHub, so the QA
+  claim is enforced by the platform instead of asserted by the audited pipeline
+
 **Developer backend**
 - Pluggable developer backend (`DEVFACTORY_DEV_BACKEND`): `ollama` (single-shot) or
   `opencode` (agentic CLI loop over a local Ollama model)

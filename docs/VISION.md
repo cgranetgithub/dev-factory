@@ -142,23 +142,37 @@ A.5.35 / A.5.36) do not ask "is the control on today" — they ask **"did it ope
 throughout the period"**. A screenshot proves nothing; a timestamped, archived,
 automated check proves a lot.
 
-### Baseline (recorded 2026-09-04, repo `cgranetgithub/dev-factory`)
+### Baseline (repo `cgranetgithub/dev-factory`, read 2026-09-04 18:20 CEST)
 
 | Setting | Value | Assessment |
 |---|---|---|
 | Ruleset `PR`, enforcement | `active` on `~DEFAULT_BRANCH` | OK |
 | `required_approving_review_count` | `1` | OK |
 | `require_code_owner_review` | `true` | OK |
+| `dismiss_stale_reviews_on_push` | `true` | OK — an approval no longer survives a later push |
+| `require_last_push_approval` | `true` | OK — the most recent reviewable push must be approved |
 | `deletion`, `non_fast_forward` | enforced | OK — no force-push, no branch deletion |
 | `bypass_actors` | `null` | OK — nobody bypasses, including the owner |
 | Collaborators | owner = admin, `bot-bobby` = write | OK — the bot cannot alter the ruleset |
-| `dismiss_stale_reviews_on_push` | `false` | **Gap** — an approval survives a later push, so auto-merge can merge unreviewed commits |
-| `require_last_push_approval` | `false` | **Gap** — same failure mode |
-| `required_status_checks` | none | **Gap** — "QA passed" is asserted by the audited pipeline, not enforced independently by the platform |
+| `required_status_checks` | none | **Gap** — the CI workflow now exists but is not yet enforced by the ruleset |
 
-The three gaps matter because the factory pushes as `bot-bobby` *after* a human approval
-can already exist on the PR. Closing them is repository-owner work (the bot has `write`,
-by design, and cannot change a ruleset).
+The first two settings were `false` earlier the same day, which mattered because the
+factory pushes as `bot-bobby` *after* a human approval can already exist on the PR, with
+auto-merge armed. Closing such gaps is repository-owner work: the bot has `write` by
+design and cannot change a ruleset.
+
+**This table went stale within thirty minutes of being written.** That is the argument for
+`devfactory controls check` rather than a hand-maintained baseline: a control statement
+that a human has to remember to update is not evidence.
+
+### Independent verification
+
+`.github/workflows/ci.yml` re-runs ruff, mypy, bandit and pytest on GitHub's
+infrastructure. The factory runs the same four tools in its own container, but that runner
+is part of the audited process — it decides for itself whether its own output is
+acceptable. Making the CI job a **required status check** on the ruleset moves the QA
+claim from the audited party to the platform. The workflow is the prerequisite; wiring it
+into the ruleset closes the last gap above.
 
 ### The mechanism to build
 
@@ -197,8 +211,9 @@ Run the existing factory as a controlled, evidenced system.
 - **Control monitoring** — `devfactory controls check`: snapshot the enforced GitHub
   configuration, compare it to a versioned expected policy, archive every check, alert on
   drift, run it per pipeline run *and* on a schedule
-- Close the three baseline gaps: `dismiss_stale_reviews_on_push`,
-  `require_last_push_approval`, required status checks
+- ~~Close the baseline gaps `dismiss_stale_reviews_on_push` and
+  `require_last_push_approval`~~ *(done 2026-09-04)*; make the CI job a required status
+  check to close the last one
 - Written policies: change management, access, incident response, model/vendor register
 
 **Exit evidence:** a change-management control operating with a complete, tamper-evident
