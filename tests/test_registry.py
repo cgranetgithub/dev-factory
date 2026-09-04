@@ -60,24 +60,41 @@ def test_router_no_candidates_raises():
         router.select("nonexistent_role")
 
 
-def test_router_require_tools_only_selects_tool_capable():
-    """With require_tools=True, every selection supports tool calling."""
+def test_router_require_agentic_loop_only_selects_drivers():
+    """With require_agentic_loop=True, every selection drives the agentic loop."""
     router = ModelRouter(verify_availability=False)
-    # Sample repeatedly since selection is random — a non-tool model must never
-    # slip through the filter.
+    # Sample repeatedly since selection is random — a non-driver must never slip
+    # through the filter.
     for _ in range(30):
-        model = router.select("developer", require_tools=True)
-        assert model.supports_tools, f"{model.name} was selected but has no tool support"
+        model = router.select("developer", require_agentic_loop=True)
+        assert model.drives_agentic_loop, f"{model.name} selected but drives no loop"
 
 
-def test_router_require_tools_excludes_non_tool_model():
-    """A developer model without tool support is filtered out by require_tools."""
+def test_router_require_agentic_loop_excludes_prose_only_model():
+    """A developer model that only replies in prose is filtered out."""
     devs = get_models_for_role("developer")
-    non_tool = [m for m in devs if not m.supports_tools]
-    if not non_tool:
-        pytest.skip("No non-tool developer model in registry to exercise the filter")
+    prose_only = [m for m in devs if not m.drives_agentic_loop]
+    if not prose_only:
+        pytest.skip("No prose-only developer model in registry to exercise the filter")
 
     router = ModelRouter(verify_availability=False)
-    selected_names = {router.select("developer", require_tools=True).name for _ in range(30)}
-    for m in non_tool:
+    selected_names = {router.select("developer", require_agentic_loop=True).name for _ in range(30)}
+    for m in prose_only:
         assert m.name not in selected_names
+
+
+def test_router_reuses_single_driver_when_not_excluding():
+    """A QA retry re-selects the developer without excluding it — the single
+    agentic-loop driver must remain selectable (no starvation)."""
+    drivers = [m for m in get_models_for_role("developer") if m.drives_agentic_loop]
+    if len(drivers) != 1:
+        pytest.skip("Test targets the single-driver opencode pool")
+    only = drivers[0].name
+
+    router = ModelRouter(verify_availability=False)
+    # No exclude (developer behaviour): picks the same driver again, no error.
+    assert router.select("developer", require_agentic_loop=True).name == only
+
+    # Excluding it (the old, buggy behaviour) would starve the pool.
+    with pytest.raises(RuntimeError, match="No available models"):
+        router.select("developer", exclude=[only], require_agentic_loop=True)

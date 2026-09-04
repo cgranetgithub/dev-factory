@@ -126,15 +126,24 @@ def test_opencode_backend_invokes_cli_and_logs_execution(monkeypatch, tmp_path):
     assert dev_execs[0]["model"] == "qwen3-coder:30b"
 
 
-def test_requires_tool_calling_tracks_backend(monkeypatch):
-    """The developer demands a tool-capable model only for the opencode backend."""
+def test_requires_agentic_loop_tracks_backend(monkeypatch):
+    """The developer demands an agentic-loop driver only for the opencode backend."""
     agent = DeveloperAgent()
 
     monkeypatch.setattr(settings, "dev_backend", "opencode")
-    assert agent.requires_tool_calling() is True
+    assert agent.requires_agentic_loop() is True
 
     monkeypatch.setattr(settings, "dev_backend", "ollama")
-    assert agent.requires_tool_calling() is False
+    assert agent.requires_agentic_loop() is False
+
+
+def test_developer_does_not_avoid_repeated_model():
+    """The developer must reuse its model across QA retries (no exclusion), while
+    the reviewer opts into excluding its first-pass model."""
+    from devfactory.agents.reviewer import ReviewerAgent
+
+    assert DeveloperAgent().avoid_repeated_model is False
+    assert ReviewerAgent().avoid_repeated_model is True
 
 
 def test_opencode_backend_raises_on_nonzero_exit(monkeypatch, tmp_path):

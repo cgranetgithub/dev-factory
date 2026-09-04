@@ -17,6 +17,9 @@ logger = logging.getLogger(__name__)
 
 class ReviewerAgent(BaseAgent):
     role = "reviewer"
+    # Two review passes run back-to-back; skip the model used by the first so the
+    # second reviewer offers a genuinely different perspective on the diff.
+    avoid_repeated_model = True
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
         if ctx.pr_number is None:

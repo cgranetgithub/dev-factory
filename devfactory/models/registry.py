@@ -14,13 +14,17 @@ class ModelMeta:
     parameters_b: float  # Billion parameters (approx)
     context_k: int  # Context window in K tokens
     roles: list[str]  # Which agent roles this model can play
-    # Whether the model exposes tool/function calling in Ollama. Required by the
-    # "opencode" developer backend (its agentic loop drives Edit/Write/run tools).
-    # A model without it still works for plain-chat roles (analyst, reviewer) and
-    # the single-shot "ollama" developer backend, but is filtered out of the
-    # opencode developer pool. Check with `ollama show <model>` — the
-    # "Capabilities" section must list "tools".
-    supports_tools: bool = True
+    # Whether the model actually DRIVES the "opencode" agentic loop — i.e. emits
+    # real Edit/Write/run tool calls rather than just describing the change in
+    # prose. This is stricter than Ollama's "tools" capability flag: several
+    # tool-capable models (devstral, qwen2.5) answer conversationally through
+    # Ollama's OpenAI-compatible endpoint and produce zero edits. Only models
+    # verified to drive the loop get True; the opencode developer backend selects
+    # exclusively among them. Irrelevant to plain-chat roles (analyst, reviewer)
+    # and to the single-shot "ollama" developer backend. Verify empirically with a
+    # smoke run (`opencode run --auto ... --print-logs`): the session log must show
+    # `permission=edit` / `touching file`, not a one-step prose reply.
+    drives_agentic_loop: bool = False
     notes: str = ""
 
 
@@ -34,8 +38,10 @@ class ModelMeta:
 #   * 3 models on the "developer"/coding side → this role writes code, where a
 #     model that hallucinates APIs on precise, schema-bound edits is useless.
 #     Only two dedicated coders survive the 20B floor (qwen3-coder, devstral),
-#     so the third slot is filled by a strong DENSE general model. All three are
-#     tool-capable, a hard requirement for the "opencode" developer backend.
+#     so the third slot is filled by a strong DENSE general model. NOTE: for the
+#     "opencode" backend only qwen3-coder actually drives the agentic tool loop
+#     (see drives_agentic_loop) — the other two reply in prose and are used only
+#     as reviewers / by the single-shot "ollama" backend.
 #   * 3 strong general models → the "analyst" role reasons about the issue and
 #     benefits from broad reasoning rather than pure code fluency.
 # The "reviewer" role draws from ALL six, so the two reviewers can pair a coder
@@ -67,6 +73,9 @@ MODELS: list[ModelMeta] = [
         parameters_b=30,
         context_k=32,
         roles=_CODING_ROLES,
+        # The only local model verified to drive the opencode agentic loop: a smoke
+        # run reaches multiple steps with real `permission=edit` / file writes.
+        drives_agentic_loop=True,
         notes="Qwen3-generation code model (MoE). Newest and strongest Qwen coder.",
     ),
     ModelMeta(
@@ -74,22 +83,24 @@ MODELS: list[ModelMeta] = [
         parameters_b=24,
         context_k=32,
         roles=_CODING_ROLES,
-        # Mistral's agentic coding model (OpenHands scaffold). It exposes tool
-        # calling in Ollama, so it drives the "opencode" developer backend —
-        # unlike codestral, which it replaces here. Keeps a non-Qwen family in the
-        # coding pool for genuinely different reviews.
-        notes="Mistral AI Devstral Small. Agentic code model, tool-capable.",
+        # Mistral's agentic coding model. Despite the branding and Ollama's "tools"
+        # capability, through Ollama's OpenAI-compatible endpoint it replies in
+        # prose and emits NO tool calls (verified: 1 loop step, 0 edits), so it
+        # cannot drive the opencode backend — drives_agentic_loop stays False. Still
+        # a valid reviewer and a valid "ollama"-backend developer.
+        notes="Mistral AI Devstral Small. Tool-capable flag, but prose-only via Ollama.",
     ),
     ModelMeta(
-        # Not a dedicated coder: a strong DENSE general model filling the third
-        # coding slot (no dedicated coder ≥20B remains after the 16B drop). Dense
-        # (not MoE) for per-token quality on precise codegen, and a plain instruct
-        # model (no reasoning `<think>` blocks) so the developer output stays clean.
+        # Not a dedicated coder: a strong DENSE general model on the coding side.
+        # Dense (not MoE) for per-token quality on precise codegen, and a plain
+        # instruct model (no reasoning `<think>` blocks). Like devstral it answers
+        # in prose under opencode (0 edits), so it does not drive the agentic loop —
+        # it remains a reviewer and an "ollama"-backend developer only.
         name="qwen2.5:32b",
         parameters_b=32,
         context_k=32,
         roles=_CODING_ROLES,
-        notes="Qwen2.5 32B dense general model, used as the developer/coding fallback.",
+        notes="Qwen2.5 32B dense general model. Prose-only via opencode.",
     ),
     # ── General (analyst + reviewer) ───────────────────────────────────────────
     ModelMeta(

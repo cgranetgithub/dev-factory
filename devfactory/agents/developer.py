@@ -29,9 +29,10 @@ logger = logging.getLogger(__name__)
 class DeveloperAgent(BaseAgent):
     role = "developer"
 
-    def requires_tool_calling(self) -> bool:
+    def requires_agentic_loop(self) -> bool:
         # The "opencode" backend drives an agentic tool loop, so it can only run on
-        # a tool-capable model; the single-shot "ollama" backend has no such need.
+        # a model verified to drive it (see registry drives_agentic_loop); the
+        # single-shot "ollama" backend has no such need.
         return settings.dev_backend == "opencode"
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
