@@ -37,15 +37,19 @@ class Scorer:
         agent = entry["agent"]
 
         if agent == "qa":
-            self._score_qa(exec_id, ctx)
+            # QA scores are now attributed to the developer execution
+            # This branch is kept to not affect the function signature but won't be called
+            # in practice with the new logic
+            pass
         elif agent == "reviewer":
             self._score_reviewer(exec_id, ctx)
         elif agent == "developer":
+            self._score_developer_quality(exec_id, ctx)
             self._db.record_score(
                 exec_id, "retry_count", ctx.qa_attempts, f"QA retries: {ctx.qa_attempts}"
             )
 
-    def _score_qa(self, exec_id: int, ctx: PipelineContext):
+    def _score_developer_quality(self, exec_id: int, ctx: PipelineContext):
         if ctx.qa_report is None:
             return
         r = ctx.qa_report

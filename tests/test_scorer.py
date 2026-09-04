@@ -94,6 +94,67 @@ def test_scorer_flush_reviewer():
     assert len(reviewer_stats) > 0
 
 
+def test_scorer_flush_with_qa_report():
+    """Test that quality scores are correctly attributed to developer execution with QA report."""
+    db = make_db()
+    scorer = Scorer(database=db)
+    task_id = db.create_task(42, "owner/repo")
+
+    ctx = PipelineContext(issue=make_issue())
+    ctx.log_execution("developer", "qwen2.5:7b", 3000, 500, 200)
+    ctx.qa_report = QAReport(
+        passed=True,
+        ruff={"issues": [{"code": "F401", "location": "test.py:1"}]},
+        mypy={"errors": []},
+        bandit={"severity": "LOW"},
+        pytest={"passed": 5, "failed": 0, "errors": []},
+        summary="All good",
+        raw_output="{}",
+    )
+    ctx.qa_attempts = 2
+
+    scorer.flush(ctx, task_id)
+    
+    # Check that scores were recorded for the developer execution
+    stats = db.model_stats()
+    developer_stats = [r for r in stats if r["role"] == "developer"]
+    assert len(developer_stats) > 0
+    
+    # Check the quality scores are present
+    score_metrics = [r["metric"] for r in developer_stats]
+    assert "tests_pass_rate" in score_metrics
+    assert "lint_score" in score_metrics
+    assert "security_score" in score_metrics
+    assert "retry_count" in score_metrics
+
+
+def test_scorer_flush_without_qa_report():
+    """Test that only retry_count is recorded when no QA report is present."""
+    db = make_db()
+    scorer = Scorer(database=db)
+    task_id = db.create_task(42, "owner/repo")
+
+    ctx = PipelineContext(issue=make_issue())
+    ctx.log_execution("developer", "qwen2.5:7b", 3000, 500, 200)
+    ctx.qa_report = None
+    ctx.qa_attempts = 3
+
+    scorer.flush(ctx, task_id)
+    
+    # Check that only retry_count was recorded for the developer execution
+    stats = db.model_stats()
+    developer_stats = [r for r in stats if r["role"] == "developer"]
+    assert len(developer_stats) > 0
+    
+    # Check that only retry_count is present (the quality scores are skipped)
+    score_metrics = [r["metric"] for r in developer_stats]
+    # Only retry_count should be present, not quality scores
+    assert "retry_count" in score_metrics
+    assert "tests_pass_rate" not in score_metrics
+    assert "lint_score" not in score_metrics
+    assert "security_score" not in score_metrics
+
+
 def test_model_stats_empty():
     db = make_db()
     assert db.model_stats() == []
