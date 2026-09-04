@@ -11,11 +11,16 @@ your final approval.
 No cloud LLM costs. No data leaves your machine. Every model run is scored and stored
 so you can compare models objectively over time.
 
+The longer-term goal is an issue → PR factory whose SDLC is precise enough to be
+**audited** — SOC 2 / ISO 27001 first, IEC 62304 / ISO 13485 next.
+See [Vision & compliance](#vision--compliance).
+
 ---
 
 ## Table of contents
 
 - [How it works](#how-it-works)
+- [Vision & compliance](#vision--compliance)
 - [Architecture](#architecture)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
@@ -72,6 +77,41 @@ You review & merge        ◄───  PR ready for your review
 
 ---
 
+## Vision & compliance
+
+DevFactory is built for a use case cloud agents cover badly: **regulated and IP-sensitive
+software work**, where the code must stay on the premises *and* the whole chain must be
+provable.
+
+Two properties drive every design decision:
+
+- **Local-first** — code, prompts and model weights never leave the machine.
+- **Auditable** — every pipeline step leaves a stored, timestamped, linkable record.
+
+The compliance targets are adopted in sequence:
+
+| Lens | Standards | Governs | When |
+|---|---|---|---|
+| The factory | SOC 2 · ISO/IEC 27001 | Access control, audit logging, change management, data residency — is the *system that produces the software* run under control? | Now |
+| The product | IEC 62304 · ISO 13485 · ISO 14971 | Requirement → test traceability, safety classification, risk management, Design History File — was *this software* engineered through a controlled process? | Next |
+
+Both reduce to the same backbone — **traceability + immutable evidence + explicit
+controls** — so the medical tier is an uplift on the infosec foundation, not a rebuild.
+
+Parts of it already exist by accident of design: the staged pipeline, the SQLite execution
+log, branch → PR → CODEOWNERS → protected `main`, and the fact that the reviewer agent
+*cannot* approve its own PR (a genuine separation-of-duties control). What is missing is
+formal gates, immutable evidence, and verified issue → requirement → code → test → review
+links.
+
+One principle bounds the autonomy: **an AI drafts, a competent human disposes.** No
+standard asks who typed the code — they ask who is accountable and whether the process
+caught the error. Autonomy scales down as safety class scales up.
+
+📄 **Full architecture and phased roadmap (P0 → P3): [docs/VISION.md](docs/VISION.md).**
+
+---
+
 ## Architecture
 
 ```
@@ -99,9 +139,9 @@ You review & merge        ◄───  PR ready for your review
                                │
                     ┌──────────┴──────────┐
                     │      Ollama         │
-                    │  qwen2.5-coder:7b   │
-                    │  deepseek-coder:16b │
-                    │  mistral:7b  …      │
+                    │  qwen3-coder:30b    │
+                    │  devstral:24b       │
+                    │  glm-4.7-flash  …   │
                     └─────────────────────┘
 ```
 
@@ -113,11 +153,31 @@ and execution logs. Nothing is global; everything is traceable.
 
 ### Model rotation
 
-Each agent role (analyst, developer, qa, reviewer) selects a model **randomly** from the
-registered models that support that role. The previous model used in a pipeline run is
-excluded from the next selection, so the two reviewers always use different models.
+Each agent role (analyst, developer, reviewer) selects a model **randomly** from the
+registered models that declare that role. This enables A/B comparisons across many
+pipeline runs without any manual configuration.
 
-This enables A/B comparisons across many pipeline runs without any manual configuration.
+Two constraints narrow the random draw:
+
+- **Reviewer diversity** — the reviewer sets `avoid_repeated_model = True`, so the second
+  review pass skips the model used by the first and offers a genuinely different
+  perspective. Other roles reuse their model freely (the developer *must*, so that a QA
+  retry keeps the model that already has the context).
+- **Agentic-loop capability** — with the `opencode` developer backend the model has to
+  actually drive a tool-calling loop. Ollama's `tools` capability flag is necessary but
+  **not** sufficient: several tool-capable models simply answer in prose and edit nothing.
+  Only models verified to drive the loop carry `drives_agentic_loop=True` in the registry,
+  and the developer requires that flag when the backend is `opencode`.
+
+### Developer backends
+
+| Backend | How it works | When to use |
+|---|---|---|
+| `ollama` *(default)* | Single-shot LLM call; the model returns whole files, DevFactory writes them | Simple, single-file changes |
+| `opencode` | Drives the [OpenCode](https://opencode.ai) CLI in `--auto` mode against a local Ollama model; the model reads, greps and edits files itself | Multi-file, context-dependent changes |
+
+The `opencode` backend needs a large context window on the Ollama side —
+set `OLLAMA_CONTEXT_LENGTH=32768` (or more) in the Ollama service environment.
 
 ---
 
@@ -129,7 +189,8 @@ This enables A/B comparisons across many pipeline runs without any manual config
 | Docker | any recent | For the QA isolation container |
 | Ollama | latest | Running locally, at least one model pulled |
 | GitHub | — | Personal access token with `repo` + `pull_request` scopes |
-| GPU | recommended | RTX 3090 24 GB VRAM or equivalent for 7–16B models |
+| GPU | recommended | RTX 3090 24 GB VRAM or equivalent — the registry targets 20–30B models |
+| OpenCode | optional | Only for the `opencode` developer backend |
 
 ---
 
@@ -176,6 +237,9 @@ cp .env.example .env
 | `DEVFACTORY_WORKSPACE` | `/tmp/devfactory` | Directory where repos are cloned |
 | `DEVFACTORY_MAX_QA_RETRIES` | `3` | Max Developer → QA loop iterations |
 | `DEVFACTORY_LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` |
+| `DEVFACTORY_DEV_BACKEND` | `ollama` | Developer backend: `ollama` (single-shot) or `opencode` (agentic CLI) |
+| `OPENCODE_BIN` | `~/.opencode/bin/opencode` | OpenCode CLI path — used only by the `opencode` backend |
+| `OPENCODE_TIMEOUT_S` | `1800` | Seconds before an OpenCode run is killed |
 | `DOCKER_TEST_IMAGE` | `devfactory-test:latest` | Name of the pre-built QA image |
 
 ---
@@ -255,21 +319,25 @@ Edit `devfactory/models/registry.py` and add a `ModelMeta` entry:
 
 ```python
 ModelMeta(
-    name="codellama:13b",
-    parameters_b=13,
-    context_k=16,
+    name="devstral:24b",
+    parameters_b=24,
+    context_k=32,
     roles=["developer", "reviewer"],
-    notes="Good at code completion tasks",
+    # Set to True only after verifying the model actually emits tool calls in
+    # OpenCode — Ollama's "tools" capability flag is not enough.
+    drives_agentic_loop=False,
+    notes="Mistral's agentic coder",
 ),
 ```
 
 Then pull the model in Ollama:
 
 ```bash
-ollama pull codellama:13b
+ollama pull devstral:24b
 ```
 
 The model will be selected randomly for its declared roles on the next pipeline run.
+Models below ~20B are deliberately not registered: they cost more retries than they save.
 
 **Roles:**
 
@@ -353,6 +421,8 @@ devfactory/
 │   └── reviewer.md          # Reviewer system prompt
 ├── docker/
 │   └── Dockerfile.test      # QA test environment
+├── docs/
+│   └── VISION.md            # Product direction + compliance architecture & roadmap
 ├── tests/                   # Unit tests (no Ollama or GitHub required)
 ├── .env.example             # Environment variable template
 ├── CLAUDE.md                # Claude Code instructions for this repo
@@ -365,15 +435,33 @@ devfactory/
 
 ## Roadmap
 
+### Compliance track
+
+The phased plan (P0 → P3) and its exit evidence live in [docs/VISION.md](docs/VISION.md).
+
+- [ ] **P0 — infosec foundation** — audit-grade immutable run logs, documented change
+      management, access/secrets review, written policies *(SOC 2 · ISO 27001)*
+- [ ] **P1 — traceability spine** — entity model + hash-chained record store + audit
+      package export (issue → requirement → code → test → verification → review → release)
+- [ ] **P2 — gates, roles & sign-off** — enforced phase gates, recorded human approvals,
+      documented separation of duties
+- [ ] **P3 — medical uplift** — safety classification, ISO 14971 risk hook, problem
+      resolution, tool-validation dossier, Design History File export *(IEC 62304 · ISO 13485)*
+
+### Capability track
+
 - [ ] **vLLM backend** — drop-in replacement for Ollama with better concurrency
 - [ ] **Optional cloud model** — opt-in fallback to a frontier API for hard tasks
       (off by default; DevFactory stays fully local unless you enable it)
+- [ ] **Empty-change guard** — fail the run when the developer produced no diff, instead
+      of pushing an empty branch and hitting a PR 422
 - [ ] **Parallel pipeline** — run multiple issues concurrently
 - [ ] **Web dashboard** — visualise KB stats and pipeline runs in the browser
 - [ ] **Integration tests** — end-to-end tests against a test GitHub repository
 - [ ] **Multi-language projects** — extend QA runner for Node.js, Go, Rust
 - [ ] **Architect agent** — decompose large issues into sub-tasks automatically
 - [ ] **Auto-merge** — optional automatic merge when all reviewers approve
+      *(kept off for regulated work: the human gate is the control)*
 
 ---
 

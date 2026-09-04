@@ -5,6 +5,27 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased]
+
+**Direction**
+- `docs/VISION.md` — product direction and compliance architecture: local-first + auditable,
+  SOC 2 / ISO 27001 first, IEC 62304 / ISO 13485 next, with a phased P0 → P3 roadmap
+- README: "Vision & compliance" section, compliance track in the roadmap
+
+**Developer backend**
+- Pluggable developer backend (`DEVFACTORY_DEV_BACKEND`): `ollama` (single-shot) or
+  `opencode` (agentic CLI loop over a local Ollama model)
+- `ModelMeta.drives_agentic_loop` — Ollama's `tools` capability is not sufficient; only
+  models verified to actually emit tool calls in OpenCode are eligible for that backend
+- `ModelRouter.select(..., require_agentic_loop=)` and `BaseAgent.avoid_repeated_model`
+  (reviewer-only), so QA retries no longer starve the developer's model pool
+
+**Models**
+- Raised the registry floor to 20B; coding pool is now qwen3-coder:30b, devstral:24b,
+  qwen2.5:32b (codestral:22b removed — no tool support)
+
+---
+
 ## [0.1.0] — 2026-06-22
 
 ### Initial release
