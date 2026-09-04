@@ -6,6 +6,19 @@ DevFactory is a local AI-powered software factory that processes GitHub issues t
 sequential SDLC pipeline: Analyst → Developer → QA → Reviewer → PR.
 It runs entirely on local LLMs served by Ollama.
 
+**Direction — read [`docs/VISION.md`](docs/VISION.md) before proposing architecture.**
+The goal is not just automation: it is an issue → PR factory whose SDLC is precise enough
+to be audited (SOC 2 / ISO 27001 first, IEC 62304 / ISO 13485 next). Two consequences for
+day-to-day work:
+
+- **Everything must stay local.** No pipeline step may send code, prompts or diffs to a
+  third-party service unless it is an explicit, opt-in, documented backend.
+- **Every step should leave evidence.** Prefer designs that record what happened
+  (inputs, outputs, verdicts, timestamps, git SHAs) over designs that only produce a result.
+  Never silently drop or overwrite an execution record.
+- The reviewer's inability to approve its own PR is a **separation-of-duties control**,
+  not a bug to work around.
+
 ## Repository layout
 
 ```
