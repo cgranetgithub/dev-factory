@@ -11,6 +11,9 @@ This project follows [Semantic Versioning](https://semver.org/).
 - `docs/VISION.md` — product direction and compliance architecture: local-first + auditable,
   SOC 2 / ISO 27001 first, IEC 62304 / ISO 13485 next, with a phased P0 → P3 roadmap
 - README: "Vision & compliance" section, compliance track in the roadmap
+- `docs/VISION.md`: control-monitoring section — what can drift, the recorded baseline of
+  the repository's enforced configuration (with three identified gaps), the planned
+  `devfactory controls check`, and the attribution limit of a non-Enterprise repository
 
 **Developer backend**
 - Pluggable developer backend (`DEVFACTORY_DEV_BACKEND`): `ollama` (single-shot) or
