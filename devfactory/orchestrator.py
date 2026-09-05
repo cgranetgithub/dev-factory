@@ -4,7 +4,8 @@ Orchestrator — runs the sequential agent pipeline for a single GitHub issue.
 Flow:
   1. Analyst    → reads issue, produces TaskSpec
   2. Git setup  → clone repo, create feature branch
-  3. Dev→QA loop → developer writes code, QA validates (max N retries)
+  3. Dev→QA loop → developer writes code, ruff autofixes it, QA validates
+                   (max N retries)
   4. Git push   → push feature branch to remote
   5. PR         → create GitHub PR
   6. Reviewer×2 → inline code reviews (different models)
@@ -109,11 +110,18 @@ class Pipeline:
     def _dev_qa_loop(self, ctx: PipelineContext, task_id: int) -> PipelineContext:
         from devfactory.config import settings
         from devfactory.github import git_ops
+        from devfactory.github.git_ops import _workspace_path
+        from devfactory.qa.autofix import autofix
 
         max_retries = settings.max_qa_retries
 
         while True:
             ctx = self.developer.execute(ctx)
+
+            # Clear the mechanical lint failures before the gate sees them, so the
+            # retry budget is spent on real defects rather than on line length.
+            autofix(_workspace_path(ctx), git_ops.changed_python_files(ctx))
+
             git_ops.commit_changes(ctx, attempt=ctx.qa_attempts + 1)
 
             ctx = self.qa.execute(ctx)

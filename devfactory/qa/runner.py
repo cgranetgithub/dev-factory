@@ -15,6 +15,11 @@ from devfactory.context import QAReport
 
 logger = logging.getLogger(__name__)
 
+# Where the candidate repo is mounted inside the QA container. Tools report their
+# findings under this prefix, but the developer agent works in the host workspace
+# and has no such directory — see _build_summary, which strips it back out.
+CONTAINER_WORKDIR = "/workspace"
+
 
 class QARunner:
     def __init__(self, image: str | None = None):
@@ -64,9 +69,9 @@ class QARunner:
             "run",
             "--rm",
             "--volume",
-            f"{repo_path.absolute()}:/workspace:ro",
+            f"{repo_path.absolute()}:{CONTAINER_WORKDIR}:ro",
             "--workdir",
-            "/workspace",
+            CONTAINER_WORKDIR,
             self.image,
             "sh",
             "-c",
@@ -203,4 +208,9 @@ class QARunner:
             for err in pytest.get("errors", [])[:5]:
                 lines.append(f"  - [pytest] {err}")
 
-        return "\n".join(lines)
+        # The summary is fed back to the developer agent on a QA retry, and that
+        # agent works in the host workspace — "/workspace/devfactory/foo.py" is a
+        # path it cannot resolve. Every tool reports under the container mount, so
+        # strip the prefix once here rather than in each parser: the agent then
+        # receives repo-relative paths it can actually open.
+        return "\n".join(lines).replace(f"{CONTAINER_WORKDIR}/", "")
