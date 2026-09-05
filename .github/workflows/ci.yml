@@ -60,3 +60,25 @@ jobs:
 
       - name: pytest
         run: pytest -q
+
+  # The factory runs its gate inside docker/Dockerfile.test, which is a thinner
+  # environment than this runner: it has no git binary until we install one, no
+  # git identity, and only the tools the image declares. A test that passes in the
+  # `qa` job above can still fail to even *collect* in there — that divergence
+  # silently blocked four factory runs before it was noticed. This job runs the
+  # suite where the factory actually runs it.
+  verification-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the verification image
+        run: docker build -t devfactory-test:latest -f docker/Dockerfile.test .
+
+      - name: Run the suite inside it, as the factory does
+        run: |
+          docker run --rm -v "$PWD:/workspace:ro" -w /workspace devfactory-test:latest sh -c '
+            D=$(mktemp -d); cp -r /workspace/. "$D"/; cd "$D"
+            pip install -q . || { echo "project install failed"; exit 1; }
+            pytest --tb=short -q
+          '
