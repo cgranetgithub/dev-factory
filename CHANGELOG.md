@@ -7,6 +7,25 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+**Review becomes a gate**
+- The reviewer moves inside the developer loop and its verdict is now acted on:
+  `changes_requested` sends the change back to the developer with the review comments,
+  anything else lets it proceed. Previously two reviews ran after the PR was opened and
+  nothing consumed the result
+- Order is verification first, then review: the deterministic gate costs a couple of
+  minutes and the review costs a model call, so the reviewer never spends its judgement
+  on code that does not even pass its own tests
+- Both gates draw on one shared budget of developer iterations (`ctx.iterations_used`),
+  so a change cannot ping-pong between them
+- The review that governed the accepted iteration is posted onto the PR — one review,
+  two publications: it decides inside the loop, and it is the record at the point where
+  the human approves
+- If the budget runs out with the reviewer still unsatisfied, the PR is opened anyway
+  with a warning banner and `ctx.review_unresolved` set: a gate that was not satisfied
+  stays visible in the evidence rather than blocking the run silently
+- The reviewer prompt now receives the acceptance criteria and is told to judge intent
+  and design, not formatting — verification already covers that
+
 **Developer accountability**
 - `prompts/developer_opencode.md` gains an explicit definition of done: the agent runs
   `ruff check --fix`, `ruff format`, `ruff check` and `pytest -q` itself and does not

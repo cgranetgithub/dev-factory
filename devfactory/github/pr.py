@@ -90,6 +90,19 @@ def _build_pr_body(ctx: PipelineContext) -> str:
             "",
         ]
 
+    # An unsatisfied review gate must be impossible to miss: the human approver is
+    # the one who arbitrates it, so it belongs at the top of what they read, not in
+    # a log file.
+    if ctx.review_unresolved:
+        lines += [
+            "> [!WARNING]",
+            "> **The review gate was not satisfied.** The change passes verification, "
+            "but the reviewer still requested changes when the iteration budget ran "
+            "out. It is opened here for a human to arbitrate — see the review comment "
+            "below.",
+            "",
+        ]
+
     # Model assignments
     if ctx.model_assignments:
         lines += ["### Agent Models Used", ""]

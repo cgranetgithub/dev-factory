@@ -44,11 +44,12 @@ You (with Claude Opus)          DevFactory (local)
 Create detailed GitHub Issue    Polls for label ready-for-dev
 Label it ready-for-dev    ───►  AnalystAgent   → structured TaskSpec
                                 DeveloperAgent → writes code (with repo context)
-                                VerificationRunner       → ruff + mypy + bandit + pytest
-                                   ↑ retry up to N times if verification fails
-                                ReviewerAgent  → inline GitHub PR review (model A)
-                                ReviewerAgent  → inline GitHub PR review (model B)
-                                Opens PR + notifies you
+                                autofix        → ruff --fix + format
+                                VerificationRunner → ruff + mypy + bandit + pytest
+                                ReviewerAgent  → verdict vs acceptance criteria
+                                   ↑ either gate sends it back to the developer
+                                     (shared budget of N iterations)
+                                Opens PR, posts the review, notifies you
                                 Scores each model → SQLite KB
 You review & merge        ◄───  PR ready for your review
 ```
@@ -118,7 +119,7 @@ caught the error. Autonomy scales down as safety class scales up.
 ┌─────────────────────────────────────────────────────────────────┐
 │  GitHub                                                         │
 │  Issues (ready-for-dev) ──► Poller ──► Pipeline                │
-│  PR Reviews ◄──────────────────────── Reviewer × 2             │
+│  PR + review record ◄──────────────── Review gate               │
 └─────────────────────────────────────────────────────────────────┘
                                │
                     PipelineContext (shared state)
@@ -159,10 +160,11 @@ pipeline runs without any manual configuration.
 
 Two constraints narrow the random draw:
 
-- **Reviewer diversity** — the reviewer sets `avoid_repeated_model = True`, so the second
-  review pass skips the model used by the first and offers a genuinely different
-  perspective. Other roles reuse their model freely (the developer *must*, so that a verification
-  retry keeps the model that already has the context).
+- **Model stability inside a run** — no role excludes the model it used last time.
+  Both the developer and the reviewer re-run on successive versions of the same change:
+  the developer must keep the model that has the context (and its pool has a single
+  agentic driver), and rotating the reviewer would move the verdict for reasons
+  unrelated to the code. Diversity comes from the random draw *across* runs.
 - **Agentic-loop capability** — with the `opencode` developer backend the model has to
   actually drive a tool-calling loop. Ollama's `tools` capability flag is necessary but
   **not** sufficient: several tool-capable models simply answer in prose and edit nothing.

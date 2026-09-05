@@ -137,13 +137,17 @@ def test_requires_agentic_loop_tracks_backend(monkeypatch):
     assert agent.requires_agentic_loop() is False
 
 
-def test_developer_does_not_avoid_repeated_model():
-    """The developer must reuse its model across Verification retries (no exclusion), while
-    the reviewer opts into excluding its first-pass model."""
+def test_no_agent_avoids_its_previous_model():
+    """Both agents re-run inside the loop, on successive versions of the same change.
+
+    Excluding the model used last time would starve the developer's single-driver
+    pool, and would hand the reviewer a different opinion every iteration for
+    reasons unrelated to the code.
+    """
     from devfactory.agents.reviewer import ReviewerAgent
 
     assert DeveloperAgent().avoid_repeated_model is False
-    assert ReviewerAgent().avoid_repeated_model is True
+    assert ReviewerAgent().avoid_repeated_model is False
 
 
 def test_opencode_backend_raises_on_nonzero_exit(monkeypatch, tmp_path):

@@ -17,9 +17,14 @@ logger = logging.getLogger(__name__)
 
 class ReviewerAgent(BaseAgent):
     role = "reviewer"
-    # Two review passes run back-to-back; skip the model used by the first so the
-    # second reviewer offers a genuinely different perspective on the diff.
-    avoid_repeated_model = True
+    # One review per loop iteration, each on a different diff. Keeping the same
+    # model across iterations means the developer answers a consistent reviewer
+    # instead of chasing a new opinion every round — rotating here caused the
+    # verdict to move for reasons unrelated to the code. (The previous setting
+    # existed because two reviewers ran back-to-back on the *same* diff; that pass
+    # no longer exists. A deliberate second opinion can come back later as its own
+    # step rather than as a side effect of model rotation.)
+    avoid_repeated_model = False
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
         if ctx.pr_number is None:
@@ -49,6 +54,15 @@ class ReviewerAgent(BaseAgent):
     def _build_user_prompt(self, ctx: PipelineContext) -> str:
         parts = [f"# Code Review: {ctx.issue.title}\n"]
 
+        # The acceptance criteria are the point of the review. Verification already
+        # decided that the code is well-formed and its tests pass; what no automated
+        # check can answer is whether the change actually does what was asked.
+        if ctx.task_spec:
+            parts.append(f"## What was asked\n{ctx.task_spec.summary}\n")
+            if ctx.task_spec.acceptance_criteria:
+                criteria = "\n".join(f"- {c}" for c in ctx.task_spec.acceptance_criteria)
+                parts.append(f"## Acceptance criteria\n{criteria}\n")
+
         if ctx.verification_report:
             parts.append(f"## Verification Report\n{ctx.verification_report.summary}\n")
 
@@ -57,7 +71,14 @@ class ReviewerAgent(BaseAgent):
 
         parts.append(
             "## Instructions\n"
-            "Review the code diff above. Return a JSON object with:\n"
+            "Review the code diff above. The change has already passed lint, type "
+            "checking, security scanning and its tests — do not spend the review on "
+            "formatting or style. Judge whether it satisfies the acceptance criteria, "
+            "whether the design is sound, and whether it breaks anything.\n\n"
+            "Use `changes_requested` only for a defect that must be fixed before merge: "
+            "an unmet acceptance criterion, a bug, or a harmful side effect. A "
+            "suggestion or a preference is `commented`.\n\n"
+            "Return a JSON object with:\n"
             "- `verdict`: 'approved' | 'changes_requested' | 'commented'\n"
             "- `summary`: overall review summary (1-3 sentences)\n"
             "- `score`: float 0.0-1.0 (code quality estimate)\n"
