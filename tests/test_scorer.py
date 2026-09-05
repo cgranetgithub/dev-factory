@@ -159,3 +159,49 @@ def test_scorer_flush_without_qa_report():
 def test_model_stats_empty():
     db = make_db()
     assert db.model_stats() == []
+
+
+def _developer_ctx() -> PipelineContext:
+    """A minimal finished run with one developer execution and a passing report."""
+    ctx = PipelineContext(issue=make_issue())
+    ctx.log_execution("developer", "qwen3-coder:30b", 3000, 500, 200)
+    ctx.verification_report = VerificationReport(
+        passed=True,
+        ruff={"issues": []},
+        mypy={"errors": []},
+        bandit={"severity": "none"},
+        pytest={"passed": 5, "failed": 0, "errors": []},
+        summary="ok",
+        raw_output="{}",
+    )
+    return ctx
+
+
+def _scores_for(db, metric: str) -> list:
+    return [r for r in db.model_stats() if r["role"] == "developer" and r["metric"] == metric]
+
+
+def test_lint_left_behind_is_recorded_for_the_developer():
+    """What the developer failed to clean up is scored separately from the
+    post-autofix state, otherwise the pipeline flatters the model."""
+    db = make_db()
+    task_id = db.create_task(42, "owner/repo")
+    ctx = _developer_ctx()
+    ctx.lint_left_behind = [7, 2]
+
+    Scorer(database=db).flush(ctx, task_id)
+
+    recorded = _scores_for(db, "lint_left_behind")
+    assert recorded, "lint_left_behind was not recorded"
+
+
+def test_unmeasured_lint_is_not_recorded_as_zero():
+    """An unmeasurable run must record nothing rather than a perfect score."""
+    db = make_db()
+    task_id = db.create_task(42, "owner/repo")
+    ctx = _developer_ctx()
+    ctx.lint_left_behind = [None, None]
+
+    Scorer(database=db).flush(ctx, task_id)
+
+    assert _scores_for(db, "lint_left_behind") == []

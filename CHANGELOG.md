@@ -7,6 +7,16 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+**Developer accountability**
+- `prompts/developer_opencode.md` gains an explicit definition of done: the agent runs
+  `ruff check --fix`, `ruff format`, `ruff check` and `pytest -q` itself and does not
+  finish while any of them fails, with named guidance for the three failures observed in
+  practice (unsplittable `E501`, uncollectable test files, undefined names)
+- Autofix now measures the lint issues the developer left behind *before* fixing them,
+  and the scorer records it as `lint_left_behind`. Without it the pipeline cleaned up
+  after the model and then scored the cleaned result; `lint_score` is now annotated as
+  post-autofix
+
 **Vocabulary — breaking**
 - The pipeline step formerly called *QA* is renamed **verification**: it runs static
   analysis and executes tests, which is "did we build it right" (IEC 62304 §5.5.5 /

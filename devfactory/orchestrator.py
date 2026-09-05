@@ -119,8 +119,11 @@ class Pipeline:
             ctx = self.developer.execute(ctx)
 
             # Clear the mechanical lint failures before the gate sees them, so the
-            # retry budget is spent on real defects rather than on line length.
-            autofix(_workspace_path(ctx), git_ops.changed_python_files(ctx))
+            # retry budget is spent on real defects rather than on line length. The
+            # return value is what the developer left behind, kept for scoring.
+            ctx.lint_left_behind.append(
+                autofix(_workspace_path(ctx), git_ops.changed_python_files(ctx))
+            )
 
             git_ops.commit_changes(ctx, attempt=ctx.verification_attempts + 1)
 

@@ -15,23 +15,38 @@ from devfactory.verification.autofix import autofix
 from devfactory.verification.runner import CONTAINER_WORKDIR
 
 
-def _capture(monkeypatch, returncode: int = 0) -> dict:
+def _ruff_output(issue_count: int) -> str:
+    """Mimic the container's combined output: the marked measurement, then the fixes."""
+    issues = ",".join(
+        f'{{"filename":"a.py","location":{{"row":{i}}},"message":"x"}}' for i in range(issue_count)
+    )
+    return (
+        f"{autofix_module._MARK_OPEN}\n"
+        f"[{issues}]\n"
+        f"{autofix_module._MARK_CLOSE}\n"
+        "Found 2 errors (2 fixed, 0 remaining).\n1 file reformatted\n"
+    )
+
+
+def _capture(monkeypatch, returncode: int = 0, stdout: str = "") -> dict:
     """Replace subprocess.run with a recorder; return the dict it writes to."""
     captured: dict = {}
 
     def fake_run(cmd, **kwargs):
         captured["cmd"] = cmd
         captured["kwargs"] = kwargs
-        return subprocess.CompletedProcess(args=cmd, returncode=returncode, stdout="", stderr="")
+        return subprocess.CompletedProcess(
+            args=cmd, returncode=returncode, stdout=stdout, stderr=""
+        )
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     return captured
 
 
 def test_autofix_runs_ruff_on_the_given_files(monkeypatch, tmp_path):
-    captured = _capture(monkeypatch)
+    captured = _capture(monkeypatch, stdout=_ruff_output(0))
 
-    assert autofix(tmp_path, ["devfactory/foo.py", "tests/test_foo.py"], image="test-image")
+    autofix(tmp_path, ["devfactory/foo.py", "tests/test_foo.py"], image="test-image")
 
     cmd = captured["cmd"]
     assert cmd[0] == "docker"
@@ -61,7 +76,7 @@ def test_autofix_skips_when_no_python_files_changed(monkeypatch, tmp_path):
     """A run that touched no Python file must not start a container."""
     captured = _capture(monkeypatch)
 
-    assert autofix(tmp_path, []) is False
+    assert autofix(tmp_path, []) is None
     assert captured == {}
 
 
@@ -73,7 +88,7 @@ def test_autofix_survives_a_missing_docker(monkeypatch, tmp_path):
 
     monkeypatch.setattr(subprocess, "run", boom)
 
-    assert autofix(tmp_path, ["a.py"]) is False
+    assert autofix(tmp_path, ["a.py"]) is None
 
 
 def test_autofix_survives_a_timeout(monkeypatch, tmp_path):
@@ -82,4 +97,33 @@ def test_autofix_survives_a_timeout(monkeypatch, tmp_path):
 
     monkeypatch.setattr(subprocess, "run", hang)
 
-    assert autofix(Path(tmp_path), ["a.py"]) is False
+    assert autofix(Path(tmp_path), ["a.py"]) is None
+
+
+def test_autofix_measures_what_the_developer_left_behind(monkeypatch, tmp_path):
+    """The count comes from the run BEFORE the fixes, so it grades the model."""
+    _capture(monkeypatch, stdout=_ruff_output(3))
+
+    assert autofix(tmp_path, ["a.py"], image="test-image") == 3
+
+
+def test_autofix_measures_before_it_fixes(monkeypatch, tmp_path):
+    """The measuring command must precede both fix commands in the script."""
+    captured = _capture(monkeypatch, stdout=_ruff_output(0))
+
+    autofix(tmp_path, ["a.py"], image="test-image")
+
+    script = captured["cmd"][-1]
+    assert script.index("--output-format=json") < script.index("--fix")
+
+
+def test_unmeasurable_output_is_not_scored_as_clean(monkeypatch, tmp_path):
+    """A missing or broken measurement returns None, never 0 — an unknown count
+    must not be recorded as a perfect score."""
+    _capture(monkeypatch, stdout="1 file reformatted")
+    assert autofix(tmp_path, ["a.py"], image="test-image") is None
+
+    _capture(
+        monkeypatch, stdout=f"{autofix_module._MARK_OPEN}\n[broken\n{autofix_module._MARK_CLOSE}"
+    )
+    assert autofix(tmp_path, ["a.py"], image="test-image") is None
