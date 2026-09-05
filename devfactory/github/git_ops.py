@@ -108,6 +108,27 @@ def commit_changes(ctx: PipelineContext, attempt: int = 1) -> str:
     return str(commit.hexsha)
 
 
+def changed_python_files(ctx: PipelineContext) -> list[str]:
+    """
+    Return the Python files the developer just touched, relative to the repo root.
+
+    Covers both tracked modifications and new files, since an agent typically does
+    both in one pass. Deleted files are excluded — there is nothing left to format.
+    """
+    workspace = _workspace_path(ctx)
+    repo = git.Repo(workspace)
+
+    # Tracked files modified in the working tree (diff against the index target).
+    modified = [item.a_path for item in repo.index.diff(None) if item.change_type != "D"]
+    # Files created by the agent are untracked until commit_changes stages them.
+    untracked = list(repo.untracked_files)
+
+    paths = {p for p in modified + untracked if p and p.endswith(".py")}
+    # Keep only files that still exist: a rename shows up as a modification of a
+    # path that is already gone.
+    return sorted(p for p in paths if (workspace / p).is_file())
+
+
 def push_branch(ctx: PipelineContext):
     """Push the feature branch to origin."""
     workspace = _workspace_path(ctx)
