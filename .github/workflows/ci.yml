@@ -5,13 +5,13 @@
 # audited: it decides for itself whether its own output is acceptable. This
 # workflow re-runs the checks on GitHub's infrastructure so the platform — not
 # the pipeline — enforces the gate. Once it is a required status check on the
-# `main` ruleset, "QA passed" stops being a self-assertion.
+# `main` ruleset, "Verification passed" stops being a self-assertion.
 #
 # Keep the tool invocations below aligned with `devfactory/qa/runner.py`:
 #   - Python 3.11 matches `docker/Dockerfile.test`
 #   - bandit uses `-ll` (medium and above), matching the runner's pass rule,
 #     which fails only on MEDIUM or HIGH findings
-# A divergence here means a PR can pass the factory's QA and fail CI, which is
+# A divergence here means a PR can pass the factory's verification and fail CI,
 # confusing rather than safe.
 name: CI
 
@@ -39,7 +39,7 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Install project and QA tools
+      - name: Install project and verification tools
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
@@ -49,7 +49,7 @@ jobs:
       - name: ruff
         run: ruff check . --no-cache
 
-      # Types — the QA authority for this project.
+      # Types — the verification step authority for this project.
       - name: mypy
         run: mypy . --ignore-missing-imports
 

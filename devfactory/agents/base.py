@@ -31,7 +31,7 @@ class BaseAgent(ABC):
     role: str  # must be set by subclass
 
     # Whether this agent needs a model selected before run(). Agents that do not
-    # call an LLM (e.g. the QA agent, which only runs deterministic Docker tools)
+    # call an LLM (e.g. the verification step agent, which only runs deterministic Docker tools)
     # set this to False so execute() skips router selection — otherwise it would
     # fail on a role that no model declares.
     requires_model: bool = True
@@ -40,7 +40,7 @@ class BaseAgent(ABC):
     # Only the reviewer sets this True, so its two passes get different models for
     # genuinely different perspectives. It must stay False for agents that run more
     # than once for other reasons — notably the developer, which re-executes on
-    # each QA retry: excluding its previous model would starve a single-model pool
+    # each verification retry: excluding its previous model would starve a single-model pool
     # (e.g. the opencode backend, pinned to the one agentic-loop driver).
     avoid_repeated_model: bool = False
 
@@ -69,7 +69,7 @@ class BaseAgent(ABC):
         if self.requires_model:
             # For agents that opt in (the reviewer), exclude the model already used
             # for THIS role in this run so the two passes differ. Off by default —
-            # the developer re-executes on each QA retry and must be free to reuse
+            # the developer re-executes on each verification retry and must be free to reuse
             # its model (its pool may hold a single eligible driver).
             exclude = None
             if self.avoid_repeated_model:
@@ -81,7 +81,7 @@ class BaseAgent(ABC):
             ctx.model_assignments[self.role] = self._model.name
             logger.info(f"[{self.role}] starting with model={self._model.name}")
         else:
-            # No LLM for this agent (e.g. QA runs deterministic Docker tools only).
+            # No LLM for this agent (e.g. verification runs deterministic Docker tools only).
             logger.info(f"[{self.role}] starting (no LLM — deterministic tools)")
 
         updated_ctx = self.run(ctx)

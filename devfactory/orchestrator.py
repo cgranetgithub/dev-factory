@@ -4,7 +4,7 @@ Orchestrator — runs the sequential agent pipeline for a single GitHub issue.
 Flow:
   1. Analyst    → reads issue, produces TaskSpec
   2. Git setup  → clone repo, create feature branch
-  3. Dev→QA loop → developer writes code, ruff autofixes it, QA validates
+  3. Dev→Verification loop → developer writes code, ruff autofixes it, verification runs
                    (max N retries)
   4. Git push   → push feature branch to remote
   5. PR         → create GitHub PR
@@ -24,11 +24,11 @@ from devfactory.kb.scorer import scorer
 logger = logging.getLogger(__name__)
 
 
-class QAFailedError(RuntimeError):
-    """Raised when the Dev↔QA loop has exhausted all its attempts.
+class VerificationFailedError(RuntimeError):
+    """Raised when the Dev↔Verification loop has exhausted all its attempts.
 
     Distinct from a generic error: the poller catches it specifically to apply
-    the ``devfactory:qa-failed`` label instead of ``devfactory:error``.
+    the ``devfactory:verification-failed`` label instead of ``devfactory:error``.
     """
 
 
@@ -36,12 +36,12 @@ class Pipeline:
     def __init__(self) -> None:
         from devfactory.agents.analyst import AnalystAgent
         from devfactory.agents.developer import DeveloperAgent
-        from devfactory.agents.qa import QAAgent
         from devfactory.agents.reviewer import ReviewerAgent
+        from devfactory.agents.verification import VerificationAgent
 
         self.analyst: AnalystAgent = AnalystAgent()
         self.developer: DeveloperAgent = DeveloperAgent()
-        self.qa: QAAgent = QAAgent()
+        self.verification: VerificationAgent = VerificationAgent()
         self.reviewer: ReviewerAgent = ReviewerAgent()
 
     def run(self, issue: GitHubIssue) -> PipelineContext:
@@ -59,7 +59,7 @@ class Pipeline:
             self._setup_git(ctx)
             db.update_task(task_id, branch_name=ctx.branch_name)
 
-            # ── 3. Developer → QA loop ────────────────────────────────────────
+            # ── 3. Developer → verification loop ────────────────────────────────────────
             ctx = self._dev_qa_loop(ctx, task_id)
 
             # ── 4. Git: push branch ───────────────────────────────────────────
@@ -83,10 +83,10 @@ class Pipeline:
             )
             logger.info(f"[pipeline] done — PR: {ctx.pr_url}")
 
-        except QAFailedError:
-            # The "qa_failed" status was already set inside the Dev↔QA loop;
+        except VerificationFailedError:
+            # The "verification_failed" status was already set inside the Dev↔Verification loop;
             # do not overwrite it with "error". The poller applies the right label.
-            logger.warning(f"[pipeline] QA failed on #{issue.number} (retries exhausted)")
+            logger.warning(f"[pipeline] Verification failed on #{issue.number} (retries exhausted)")
             raise
 
         except Exception as e:
@@ -111,9 +111,9 @@ class Pipeline:
         from devfactory.config import settings
         from devfactory.github import git_ops
         from devfactory.github.git_ops import _workspace_path
-        from devfactory.qa.autofix import autofix
+        from devfactory.verification.autofix import autofix
 
-        max_retries = settings.max_qa_retries
+        max_retries = settings.max_verification_retries
 
         while True:
             ctx = self.developer.execute(ctx)
@@ -122,24 +122,30 @@ class Pipeline:
             # retry budget is spent on real defects rather than on line length.
             autofix(_workspace_path(ctx), git_ops.changed_python_files(ctx))
 
-            git_ops.commit_changes(ctx, attempt=ctx.qa_attempts + 1)
+            git_ops.commit_changes(ctx, attempt=ctx.verification_attempts + 1)
 
-            ctx = self.qa.execute(ctx)
+            ctx = self.verification.execute(ctx)
 
-            if ctx.qa_report and ctx.qa_report.passed:
-                logger.info(f"[pipeline] QA passed after {ctx.qa_attempts + 1} attempt(s)")
+            attempt = ctx.verification_attempts + 1
+            report = ctx.verification_report
+
+            if report and report.passed:
+                logger.info(f"[pipeline] Verification passed after {attempt} attempt(s)")
                 return ctx
 
-            ctx.qa_attempts += 1
+            ctx.verification_attempts += 1
 
-            if ctx.qa_attempts >= max_retries:
-                db.update_task(task_id, status="qa_failed")
-                raise QAFailedError(
-                    f"QA failed after {max_retries} attempt(s) on issue #{ctx.issue.number}.\n"
-                    f"Last report:\n{ctx.qa_report.summary if ctx.qa_report else 'N/A'}"
+            if ctx.verification_attempts >= max_retries:
+                db.update_task(task_id, status="verification_failed")
+                raise VerificationFailedError(
+                    f"Verification failed after {max_retries} attempt(s) "
+                    f"on issue #{ctx.issue.number}.\n"
+                    f"Last report:\n{report.summary if report else 'N/A'}"
                 )
 
-            logger.warning(f"[pipeline] QA failed — retry {ctx.qa_attempts}/{max_retries}")
+            logger.warning(
+                f"[pipeline] Verification failed — retry {ctx.verification_attempts}/{max_retries}"
+            )
 
     def _push_branch(self, ctx: PipelineContext):
         from devfactory.github import git_ops

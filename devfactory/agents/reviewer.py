@@ -1,5 +1,5 @@
 """
-Reviewer Agent — reads the PR diff + QA report and posts an inline GitHub review.
+Reviewer Agent — reads the PR diff + verification report and posts an inline GitHub review.
 Can be run twice with different models (router excludes already-used models).
 """
 
@@ -49,8 +49,8 @@ class ReviewerAgent(BaseAgent):
     def _build_user_prompt(self, ctx: PipelineContext) -> str:
         parts = [f"# Code Review: {ctx.issue.title}\n"]
 
-        if ctx.qa_report:
-            parts.append(f"## QA Report\n{ctx.qa_report.summary}\n")
+        if ctx.verification_report:
+            parts.append(f"## Verification Report\n{ctx.verification_report.summary}\n")
 
         diff = ctx.diff or "[diff not available]"
         parts.append(f"## Diff\n```diff\n{diff}\n```\n")

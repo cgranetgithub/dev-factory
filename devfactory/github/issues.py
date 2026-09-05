@@ -16,14 +16,14 @@ logger = logging.getLogger(__name__)
 # Labels managed by devfactory
 LABEL_READY = "ready-for-dev"
 LABEL_PROGRESS = "devfactory:in-progress"
-LABEL_QA_FAILED = "devfactory:qa-failed"
+LABEL_VERIFICATION_FAILED = "devfactory:verification-failed"
 LABEL_REVIEW = "devfactory:ready-for-review"
 LABEL_ERROR = "devfactory:error"
 
 # Colors for auto-created labels
 LABEL_COLORS = {
     LABEL_PROGRESS: "0075ca",
-    LABEL_QA_FAILED: "e4e669",
+    LABEL_VERIFICATION_FAILED: "e4e669",
     LABEL_REVIEW: "0e8a16",
     LABEL_ERROR: "d73a4a",
 }
@@ -70,11 +70,11 @@ def mark_ready_for_review(repo: str, issue_number: int, pr_url: str):
 
 
 def mark_qa_failed(repo: str, issue_number: int, report: str):
-    """Swap in-progress → qa-failed and post the last QA report as a comment.
+    """Swap in-progress → verification-failed and post the last verification report as a comment.
 
-    Called when the Dev↔QA loop has exhausted all its attempts: this case is
+    Called when the Dev↔Verification loop has exhausted all its attempts: this case is
     kept distinct from a generic crash (devfactory:error) so the human knows the
-    code was produced but does not pass QA.
+    code was produced but does not pass verification.
     """
     raw = gh.get_issue(repo, issue_number)
     _ensure_labels(repo)
@@ -82,16 +82,18 @@ def mark_qa_failed(repo: str, issue_number: int, report: str):
         raw.remove_from_labels(LABEL_PROGRESS)
     except Exception:
         pass
-    raw.add_to_labels(LABEL_QA_FAILED)
-    raw.create_comment(f"**DevFactory — QA failed (retries exhausted):**\n\n{report[:2000]}")
-    logger.warning(f"[issues] #{issue_number} marked qa-failed")
+    raw.add_to_labels(LABEL_VERIFICATION_FAILED)
+    raw.create_comment(
+        f"**DevFactory — Verification failed (retries exhausted):**\n\n{report[:2000]}"
+    )
+    logger.warning(f"[issues] #{issue_number} marked verification-failed")
 
 
 def mark_error(repo: str, issue_number: int, error: str):
     """Mark issue as errored and post comment."""
     raw = gh.get_issue(repo, issue_number)
     _ensure_labels(repo)
-    for lbl in (LABEL_PROGRESS, LABEL_QA_FAILED):
+    for lbl in (LABEL_PROGRESS, LABEL_VERIFICATION_FAILED):
         try:
             raw.remove_from_labels(lbl)
         except Exception:

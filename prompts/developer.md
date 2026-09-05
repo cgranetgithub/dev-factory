@@ -34,4 +34,4 @@ Rules:
 
 ## On QA retry
 
-If you receive QA feedback, address ALL the reported issues. Do not change working code unnecessarily — only fix what's broken.
+If you receive verification feedback, address ALL the reported issues. Do not change working code unnecessarily — only fix what's broken.

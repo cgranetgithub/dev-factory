@@ -138,7 +138,7 @@ def test_requires_agentic_loop_tracks_backend(monkeypatch):
 
 
 def test_developer_does_not_avoid_repeated_model():
-    """The developer must reuse its model across QA retries (no exclusion), while
+    """The developer must reuse its model across Verification retries (no exclusion), while
     the reviewer opts into excluding its first-pass model."""
     from devfactory.agents.reviewer import ReviewerAgent
 

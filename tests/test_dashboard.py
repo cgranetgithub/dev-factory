@@ -7,13 +7,31 @@ def _rows():
     """Synthetic model_stats() rows mixing quality scores and diagnostic counts."""
     return [
         # Developer model whose only metric is the diagnostic retry_count (0 = good).
-        {"model": "coder:7b", "role": "developer", "metric": "retry_count",
-         "avg_score": 0.0, "runs": 2, "avg_ms": 5000},
+        {
+            "model": "coder:7b",
+            "role": "developer",
+            "metric": "retry_count",
+            "avg_score": 0.0,
+            "runs": 2,
+            "avg_ms": 5000,
+        },
         # Analyst model with a real 0.0–1.0 quality score.
-        {"model": "mistral:7b", "role": "analyst", "metric": "tests_pass_rate",
-         "avg_score": 1.0, "runs": 1, "avg_ms": 4000},
-        {"model": "mistral:7b", "role": "reviewer", "metric": "review_verdict",
-         "avg_score": 0.6, "runs": 1, "avg_ms": 3000},
+        {
+            "model": "mistral:7b",
+            "role": "analyst",
+            "metric": "tests_pass_rate",
+            "avg_score": 1.0,
+            "runs": 1,
+            "avg_ms": 4000,
+        },
+        {
+            "model": "mistral:7b",
+            "role": "reviewer",
+            "metric": "review_verdict",
+            "avg_score": 0.6,
+            "runs": 1,
+            "avg_ms": 3000,
+        },
     ]
 
 

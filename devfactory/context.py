@@ -34,7 +34,7 @@ class TaskSpec:
 
 
 @dataclass
-class QAReport:
+class VerificationReport:
     passed: bool
     ruff: dict  # {"issues": [...], "score": float}
     mypy: dict  # {"errors": [...], "score": float}
@@ -67,11 +67,11 @@ class PipelineContext:
 
     # Agent outputs
     task_spec: TaskSpec | None = None
-    qa_report: QAReport | None = None
+    verification_report: VerificationReport | None = None
     review_results: list[ReviewResult] = field(default_factory=list)
 
     # Tracking
-    qa_attempts: int = 0
+    verification_attempts: int = 0
     model_assignments: dict[str, str] = field(default_factory=dict)
     # {"analyst": "qwen2.5-coder:14b", "developer": "deepseek-coder-v2:16b", ...}
 

@@ -1,15 +1,15 @@
 """
-Deterministic formatting pass applied between the developer and the QA gate.
+Deterministic formatting pass applied between the developer and the verification gate.
 
-Most of what failed QA in practice was mechanical: lines over the limit, unsorted
+Most of what failed verification in practice was mechanical: lines over the limit, unsorted
 imports, unused imports, ``else`` after ``return``. Ruff fixes all of that without
 a model, reliably and in under a second. Spending three LLM retries on whitespace
 wastes the retry budget that should be available for real defects — and the model
 demonstrably fails to spend it well.
 
-Runs inside the same image as the QA runner, so the ruff that fixes the code is the
+Runs inside the same image as the verification runner, so the ruff that fixes the code is the
 ruff that judges it. The mount is writable here, unlike in
-:mod:`devfactory.qa.runner`, because the whole point is to modify the checkout.
+:mod:`devfactory.verification.runner`, because the whole point is to modify the checkout.
 
 Only the files the developer touched are formatted: running ``ruff format`` over the
 whole repository would bury the real change under unrelated reformatting.
@@ -22,7 +22,7 @@ import subprocess
 from pathlib import Path
 
 from devfactory.config import settings
-from devfactory.qa.runner import CONTAINER_WORKDIR
+from devfactory.verification.runner import CONTAINER_WORKDIR
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +38,11 @@ def autofix(repo_path: Path, files: list[str], image: str | None = None) -> bool
         repo_path: Host path of the workspace checkout.
         files:     Repo-relative Python file paths, as returned by
                    :func:`devfactory.github.git_ops.changed_python_files`.
-        image:     Docker image to use; defaults to the QA image.
+        image:     Docker image to use; defaults to the verification image.
 
     Returns:
         True if ruff ran (whether or not it changed anything), False if it could
-        not run at all. A failure here is never fatal: QA still runs afterwards and
+        not run at all. A failure here is never fatal: verification still runs afterwards and
         will report whatever is left.
     """
     if not files:
@@ -53,7 +53,7 @@ def autofix(repo_path: Path, files: list[str], image: str | None = None) -> bool
     # --no-cache: the cache would be written into the mounted checkout and then
     # committed. Two separate steps: `check --fix` applies safe lint fixes (import
     # sorting, unused imports, else-after-return), `format` handles layout and line
-    # length. Neither must abort the chain, hence `|| true` — the QA gate is what
+    # length. Neither must abort the chain, hence `|| true` — the verification gate is what
     # decides pass or fail, not this step.
     cmd = f"ruff check --fix --no-cache {quoted} || true; ruff format --no-cache {quoted} || true"
     full_cmd = [
@@ -61,7 +61,7 @@ def autofix(repo_path: Path, files: list[str], image: str | None = None) -> bool
         "run",
         "--rm",
         "--volume",
-        f"{repo_path.absolute()}:{CONTAINER_WORKDIR}",  # writable, unlike QA
+        f"{repo_path.absolute()}:{CONTAINER_WORKDIR}",  # writable, unlike verification
         "--workdir",
         CONTAINER_WORKDIR,
         image or settings.docker_test_image,
@@ -73,7 +73,7 @@ def autofix(repo_path: Path, files: list[str], image: str | None = None) -> bool
     try:
         result = subprocess.run(full_cmd, capture_output=True, text=True, timeout=_TIMEOUT_S)
     except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-        # Docker missing or hung: log and continue. QA will surface the lint issues.
+        # Docker missing or hung: log and continue. verification will surface the lint issues.
         logger.warning(f"[autofix] could not run ruff ({e}) — continuing without it")
         return False
 

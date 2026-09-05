@@ -63,7 +63,7 @@ already fall out of its shape. The gap is evidence and formalisation, not a new 
 
 | Control area | What exists today | Status | What to add |
 |---|---|---|---|
-| Staged, controlled process | Analyst → Developer → QA → Reviewer ×2 → PR | Partial | Explicit phase gates with a defined exit condition and a stored artifact per stage |
+| Staged, controlled process | Analyst → Developer → Verification → Reviewer ×2 → PR | Partial | Explicit phase gates with a defined exit condition and a stored artifact per stage |
 | Audit trail | KB (SQLite) logs each execution: model, duration, tokens, verdicts | Partial | Append-only, hash-chained records: prompt + output + verdict + timestamp + git SHA |
 | Change management | Branch + PR + CODEOWNERS, protected `main`, human merge | Have | Link each change back to its issue and approval record |
 | Separation of duties | The reviewer cannot approve its own PR (GitHub returns 422) | Have | Document it as a control; keep an independent, competent human approver |
@@ -95,9 +95,9 @@ Design         62304 §5.3–5.4                       AI draft
   ↓
 Code           62304 §5.5 · ISO 27001 A.8.28        AI (opencode backend)
   ↓
-Test           62304 §5.6–5.7                       AI + QA gate
+Test           62304 §5.6–5.7                       AI + verification gate
   ↓
-Verification   62304 §5.7 · SOC 2 CC8.1             Docker QA
+Verification   62304 §5.7 · SOC 2 CC8.1             Docker verification
   ↓
 Review & sign-off  ISO 13485 §7.3.5 · A.8.32        Human authority
   ↓
@@ -170,7 +170,7 @@ that a human has to remember to update is not evidence.
 `.github/workflows/ci.yml` re-runs ruff, mypy, bandit and pytest on GitHub's
 infrastructure. The factory runs the same four tools in its own container, but that runner
 is part of the audited process — it decides for itself whether its own output is
-acceptable. Making the CI job a **required status check** on the ruleset moves the QA
+acceptable. Making the CI job a **required status check** on the ruleset moves the verification step
 claim from the audited party to the platform. The workflow is the prerequisite; wiring it
 into the ruleset closes the last gap above.
 

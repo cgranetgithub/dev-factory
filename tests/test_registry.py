@@ -84,7 +84,7 @@ def test_router_require_agentic_loop_excludes_prose_only_model():
 
 
 def test_router_reuses_single_driver_when_not_excluding():
-    """A QA retry re-selects the developer without excluding it — the single
+    """A verification retry re-selects the developer without excluding it — the single
     agentic-loop driver must remain selectable (no starvation)."""
     drivers = [m for m in get_models_for_role("developer") if m.drives_agentic_loop]
     if len(drivers) != 1:

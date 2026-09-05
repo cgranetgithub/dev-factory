@@ -52,8 +52,8 @@ class ModelMeta:
 # ~23 GB on disk (e.g. qwen3.6:35b-a3b) are avoided: they leave too little for a
 # 32K context. Aim for ≤ ~20 GB on disk.
 #
-# Note: the "qa" role uses NO model — QAAgent runs deterministic Docker tools
-# (ruff/mypy/bandit/pytest), it never calls an LLM, so no model declares "qa".
+# Note: the "verification" role uses NO model — VerificationAgent runs deterministic Docker tools
+# (ruff/mypy/bandit/pytest), it never calls an LLM, so no model declares "verification".
 #
 # Roles: "analyst", "developer", "reviewer"
 

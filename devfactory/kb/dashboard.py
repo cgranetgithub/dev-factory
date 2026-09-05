@@ -44,7 +44,7 @@ def print_dashboard(db: Database, role_filter: str | None = None, metric_filter:
     task_counts = db.task_counts()
     panels = []
     for status, count in task_counts.items():
-        color = {"ready_for_merge": "green", "error": "red", "qa_failed": "yellow"}.get(
+        color = {"ready_for_merge": "green", "error": "red", "verification_failed": "yellow"}.get(
             status, "blue"
         )
         panels.append(Panel(f"[bold]{count}[/]", title=status, border_style=color, width=20))

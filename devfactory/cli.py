@@ -206,9 +206,7 @@ def _run_init(repo: str):
         available = ollama.list_models()
         console.print(f"   [green]✓ Ollama running — {len(available)} model(s) available[/]")
         if not available:
-            console.print(
-                "   [yellow]  No models pulled yet. Run: devfactory models --sync[/]"
-            )
+            console.print("   [yellow]  No models pulled yet. Run: devfactory models --sync[/]")
     except Exception as e:
         console.print(f"   [red]✗ Ollama not reachable: {e}[/]")
 
