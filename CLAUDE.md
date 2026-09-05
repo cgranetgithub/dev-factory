@@ -3,7 +3,7 @@
 ## Project overview
 
 DevFactory is a local AI-powered software factory that processes GitHub issues through a
-sequential SDLC pipeline: Analyst → Developer → QA → Reviewer → PR.
+sequential SDLC pipeline: Analyst → Developer → Verification → Reviewer → PR.
 It runs entirely on local LLMs served by Ollama.
 
 **Direction — read [`docs/VISION.md`](docs/VISION.md) before proposing architecture.**
@@ -25,7 +25,7 @@ day-to-day work:
 devfactory/
 ├── devfactory/          # Main package
 │   ├── agents/          # Agent implementations (analyst, developer, qa, reviewer)
-│   ├── qa/              # Docker QA runner (ruff, mypy, bandit, pytest)
+│   ├── qa/              # Docker verification runner (ruff, mypy, bandit, pytest)
 │   ├── github/          # GitHub integration (poller, git_ops, pr, review, issues)
 │   ├── kb/              # Knowledge base (SQLite, scorer, dashboard)
 │   ├── models/          # LLM client, router, registry, retry
@@ -36,7 +36,7 @@ devfactory/
 │   ├── logging_setup.py # Rich console + JSON-lines file logging
 │   └── cli.py           # Typer CLI entry point
 ├── prompts/             # Prompt templates (Markdown, loaded at runtime)
-├── docker/              # Dockerfile.test for QA isolation
+├── docker/              # Dockerfile.test for verification isolation
 └── tests/               # Pytest unit tests
 ```
 
@@ -100,10 +100,10 @@ Poller detects label ready-for-dev
   → Pipeline.run(issue)
       1. AnalystAgent   → TaskSpec (JSON)
       2. git_ops.setup_branch
-      3. loop (max DEVFACTORY_MAX_QA_RETRIES):
+      3. loop (max DEVFACTORY_MAX_VERIFICATION_RETRIES):
            DeveloperAgent → writes files to workspace
            git_ops.commit_changes
-           QARunner (Docker) → QAReport
+           VerificationRunner (Docker) → VerificationReport
            if passed: break
       4. git_ops.push_branch
       5. create_or_update_pr

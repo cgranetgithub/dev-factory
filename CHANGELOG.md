@@ -7,6 +7,22 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+**Vocabulary — breaking**
+- The pipeline step formerly called *QA* is renamed **verification**: it runs static
+  analysis and executes tests, which is "did we build it right" (IEC 62304 §5.5.5 /
+  §5.6 / §5.7, SOC 2 CC8.1). *Validation* — acceptance criteria / UAT — is deliberately
+  left free for a future gate.
+- Renamed: `devfactory.qa` package → `devfactory.verification`, `QAAgent` →
+  `VerificationAgent` (role `qa` → `verification`), `QARunner` → `VerificationRunner`,
+  `QAReport` → `VerificationReport`, `QAFailedError` → `VerificationFailedError`,
+  `ctx.qa_report` / `ctx.qa_attempts` → `ctx.verification_report` /
+  `ctx.verification_attempts`, label `devfactory:qa-failed` →
+  `devfactory:verification-failed`, setting `DEVFACTORY_MAX_QA_RETRIES` →
+  `DEVFACTORY_MAX_VERIFICATION_RETRIES`, task status `qa_failed` →
+  `verification_failed`.
+- Historic KB rows are migrated on startup, so the audit trail keeps one vocabulary
+  across its whole series rather than changing meaning mid-stream.
+
 **Direction**
 - `docs/VISION.md` — product direction and compliance architecture: local-first + auditable,
   SOC 2 / ISO 27001 first, IEC 62304 / ISO 13485 next, with a phased P0 → P3 roadmap
@@ -16,7 +32,7 @@ This project follows [Semantic Versioning](https://semver.org/).
   `devfactory controls check`, and the attribution limit of a non-Enterprise repository
 
 **Verification**
-- `.github/workflows/ci.yml` — ruff, mypy, bandit and pytest re-run on GitHub, so the QA
+- `.github/workflows/ci.yml` — ruff, mypy, bandit and pytest re-run on GitHub, so the verification step
   claim is enforced by the platform instead of asserted by the audited pipeline
 
 **Developer backend**
@@ -25,7 +41,7 @@ This project follows [Semantic Versioning](https://semver.org/).
 - `ModelMeta.drives_agentic_loop` — Ollama's `tools` capability is not sufficient; only
   models verified to actually emit tool calls in OpenCode are eligible for that backend
 - `ModelRouter.select(..., require_agentic_loop=)` and `BaseAgent.avoid_repeated_model`
-  (reviewer-only), so QA retries no longer starve the developer's model pool
+  (reviewer-only), so Verification retries no longer starve the developer's model pool
 
 **Models**
 - Raised the registry floor to 20B; coding pool is now qwen3-coder:30b, devstral:24b,
@@ -61,7 +77,7 @@ This project follows [Semantic Versioning](https://semver.org/).
 - PR creation with structured body: acceptance criteria checkboxes, QA summary, model assignments
 - Inline GitHub PR Reviews with diff-position mapping
 - Automated label management: `devfactory:in-progress`, `devfactory:ready-for-review`,
-  `devfactory:qa-failed`, `devfactory:error`
+  `devfactory:verification-failed`, `devfactory:error`
 
 **Knowledge base**
 - SQLite schema: `models`, `tasks`, `executions`, `scores`

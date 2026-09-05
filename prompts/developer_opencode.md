@@ -24,5 +24,5 @@ the task explicitly requires it.
 
 ## On QA retry
 
-If the task includes QA feedback from a previous attempt, address **all** the
+If the task includes verification feedback from a previous attempt, address **all** the
 reported issues. Do not change working code unnecessarily — only fix what is broken.

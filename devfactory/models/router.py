@@ -59,7 +59,7 @@ class ModelRouter:
         Select a random model for the given role.
 
         Args:
-            role: Agent role ("analyst", "developer", "qa", "reviewer")
+            role: Agent role ("analyst", "developer", "verification", "reviewer")
             exclude: Model names to exclude (e.g. already used in this pipeline run)
             require_agentic_loop: If True, only consider models verified to drive
                 the opencode agentic loop (needed by the "opencode" dev backend).

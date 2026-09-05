@@ -36,8 +36,8 @@ class Scorer:
     def _score_entry(self, exec_id: int, entry: dict, ctx: PipelineContext):
         agent = entry["agent"]
 
-        if agent == "qa":
-            # QA scores are now attributed to the developer execution
+        if agent == "verification":
+            # Verification scores are now attributed to the developer execution
             # This branch is kept to not affect the function signature but won't be called
             # in practice with the new logic
             pass
@@ -46,13 +46,16 @@ class Scorer:
         elif agent == "developer":
             self._score_developer_quality(exec_id, ctx)
             self._db.record_score(
-                exec_id, "retry_count", ctx.qa_attempts, f"QA retries: {ctx.qa_attempts}"
+                exec_id,
+                "retry_count",
+                ctx.verification_attempts,
+                f"Verification retries: {ctx.verification_attempts}",
             )
 
     def _score_developer_quality(self, exec_id: int, ctx: PipelineContext):
-        if ctx.qa_report is None:
+        if ctx.verification_report is None:
             return
-        r = ctx.qa_report
+        r = ctx.verification_report
 
         # tests_pass_rate: ratio of passed tests
         total = r.pytest.get("passed", 0) + r.pytest.get("failed", 0)

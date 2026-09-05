@@ -4,7 +4,7 @@ GitHub PR creation and management.
 Creates a structured PR body including:
 - Link to the originating issue (``Closes #N``)
 - Acceptance criteria as checkboxes
-- QA report summary
+- verification report summary
 - Model assignments used during generation
 """
 
@@ -81,12 +81,12 @@ def _build_pr_body(ctx: PipelineContext) -> str:
             lines.append(f"- [ ] {criterion}")
         lines.append("")
 
-    # QA summary
-    if ctx.qa_report:
+    # Verification summary
+    if ctx.verification_report:
         lines += [
-            "### QA Results",
+            "### Verification Results",
             "",
-            ctx.qa_report.summary,
+            ctx.verification_report.summary,
             "",
         ]
 

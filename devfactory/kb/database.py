@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     github_issue_id INTEGER NOT NULL,
     repo            TEXT NOT NULL,
     status          TEXT NOT NULL DEFAULT 'pending',
-    -- status: pending | in_progress | qa_failed | review_failed
+    -- status: pending | in_progress | verification_failed | review_failed
     --         | ready_for_merge | merged | error
     branch_name     TEXT,
     pr_url          TEXT,
@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS executions (
     task_id           INTEGER REFERENCES tasks(id),
     model_id          INTEGER REFERENCES models(id),
     agent_type        TEXT NOT NULL,
-    -- agent_type: analyst | developer | qa | reviewer
+    -- agent_type: analyst | developer | verification | reviewer
     prompt_tokens     INTEGER DEFAULT 0,
     completion_tokens INTEGER DEFAULT 0,
     duration_ms       INTEGER DEFAULT 0,
@@ -81,7 +81,7 @@ TASK_STATUSES = frozenset(
     {
         "pending",
         "in_progress",
-        "qa_failed",
+        "verification_failed",
         "review_failed",
         "ready_for_merge",
         "merged",
@@ -101,7 +101,27 @@ class Database:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as conn:
             conn.executescript(SCHEMA)
+            self._migrate_qa_to_verification(conn)
         logger.debug(f"DB ready at {self.path}")
+
+    @staticmethod
+    def _migrate_qa_to_verification(conn: sqlite3.Connection):
+        """Rewrite the pre-rename vocabulary in stored records.
+
+        The KB is the audit trail: leaving rows written before the rename saying
+        "qa" while new rows say "verification" would make two vocabularies coexist
+        in the evidence, and anyone reading it later would have to be told which
+        period used which word. Rewriting the historic rows keeps a single meaning
+        across the whole series. Idempotent — it matches nothing once applied.
+        """
+        renamed = conn.execute(
+            "UPDATE tasks SET status='verification_failed' WHERE status='qa_failed'"
+        ).rowcount
+        renamed += conn.execute(
+            "UPDATE executions SET agent_type='verification' WHERE agent_type='qa'"
+        ).rowcount
+        if renamed:
+            logger.info(f"[db] migrated {renamed} row(s) from the 'qa' vocabulary")
 
     @contextmanager
     def _conn(self):

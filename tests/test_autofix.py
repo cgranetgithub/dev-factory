@@ -1,5 +1,5 @@
 """
-Tests for the deterministic ruff pass that runs between the developer and QA.
+Tests for the deterministic ruff pass that runs between the developer and verification.
 
 Docker is mocked throughout — these assert the command that would be run, not the
 result of running it.
@@ -10,9 +10,9 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from devfactory.qa import autofix as autofix_module
-from devfactory.qa.autofix import autofix
-from devfactory.qa.runner import CONTAINER_WORKDIR
+from devfactory.verification import autofix as autofix_module
+from devfactory.verification.autofix import autofix
+from devfactory.verification.runner import CONTAINER_WORKDIR
 
 
 def _capture(monkeypatch, returncode: int = 0) -> dict:
@@ -47,7 +47,7 @@ def test_autofix_runs_ruff_on_the_given_files(monkeypatch, tmp_path):
 
 
 def test_autofix_mounts_the_checkout_writable(monkeypatch, tmp_path):
-    """Unlike the QA runner, this step must be able to modify the files."""
+    """Unlike the verification runner, this step must be able to modify the files."""
     captured = _capture(monkeypatch)
 
     autofix(tmp_path, ["a.py"], image="test-image")
@@ -66,7 +66,7 @@ def test_autofix_skips_when_no_python_files_changed(monkeypatch, tmp_path):
 
 
 def test_autofix_survives_a_missing_docker(monkeypatch, tmp_path):
-    """Autofix is best-effort: QA remains the gate, so failure here is not fatal."""
+    """Autofix is best-effort: verification remains the gate, so failure here is not fatal."""
 
     def boom(cmd, **kwargs):
         raise FileNotFoundError("docker not found")

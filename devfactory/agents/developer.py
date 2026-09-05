@@ -1,6 +1,6 @@
 """
 Developer Agent — generates or modifies code based on TaskSpec.
-On retry, receives QA feedback as additional context.
+On retry, receives verification feedback as additional context.
 
 Two backends, selected by ``settings.dev_backend``:
   * "ollama"   — a single LLM call whose response is a set of full-file blocks
@@ -40,7 +40,7 @@ class DeveloperAgent(BaseAgent):
             raise RuntimeError("DeveloperAgent requires a TaskSpec — run AnalystAgent first")
 
         # Dispatch on the configured backend. Both mutate files in the workspace
-        # repo; the rest of the pipeline (commit → QA → …) is backend-agnostic.
+        # repo; the rest of the pipeline (commit → verification → …) is backend-agnostic.
         if settings.dev_backend == "opencode":
             return self._run_opencode(ctx)
         return self._run_ollama(ctx)
@@ -89,12 +89,12 @@ class DeveloperAgent(BaseAgent):
             ctx_block = build_context_block(repo_path, spec.files_to_modify)
             parts.append(f"\n{ctx_block}")
 
-        # On retry: include QA feedback
-        if ctx.qa_attempts > 0 and ctx.qa_report:
+        # On retry: include verification feedback
+        if ctx.verification_attempts > 0 and ctx.verification_report:
             parts.append(
-                f"\n## QA Feedback (attempt {ctx.qa_attempts})\n"
-                f"The previous implementation failed QA. Fix the following issues:\n\n"
-                f"{ctx.qa_report.summary}"
+                f"\n## Verification Feedback (attempt {ctx.verification_attempts})\n"
+                f"The previous implementation failed verification. Fix the following issues:\n\n"
+                f"{ctx.verification_report.summary}"
             )
 
         parts.append(
@@ -201,7 +201,7 @@ class DeveloperAgent(BaseAgent):
 
         # Record the execution in the KB. OpenCode does not report token counts
         # through this interface, so they are logged as 0 — developer scoring is
-        # derived from the QA outcome, not token usage.
+        # derived from the verification outcome, not token usage.
         ctx.log_execution(
             agent=self.role,
             model=self.model.name,
@@ -235,12 +235,12 @@ class DeveloperAgent(BaseAgent):
         parts.append(f"\n## Test Strategy\n{spec.test_strategy}")
         parts.append(f"\n## Technical Notes\n{spec.tech_notes}")
 
-        # On retry: include QA feedback so OpenCode fixes the reported issues.
-        if ctx.qa_attempts > 0 and ctx.qa_report:
+        # On retry: include verification feedback so OpenCode fixes the reported issues.
+        if ctx.verification_attempts > 0 and ctx.verification_report:
             parts.append(
-                f"\n## QA Feedback (attempt {ctx.qa_attempts})\n"
-                f"The previous implementation failed QA. Fix the following issues:\n\n"
-                f"{ctx.qa_report.summary}"
+                f"\n## Verification Feedback (attempt {ctx.verification_attempts})\n"
+                f"The previous implementation failed verification. Fix the following issues:\n\n"
+                f"{ctx.verification_report.summary}"
             )
 
         return "\n".join(parts)

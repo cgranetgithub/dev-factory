@@ -1,6 +1,6 @@
 """Tests for PipelineContext."""
 
-from devfactory.context import GitHubIssue, PipelineContext, QAReport, TaskSpec
+from devfactory.context import GitHubIssue, PipelineContext, TaskSpec, VerificationReport
 
 
 def make_issue(**kwargs) -> GitHubIssue:
@@ -20,7 +20,7 @@ def test_context_defaults():
     assert ctx.branch_name == ""
     assert ctx.commits == []
     assert ctx.diff == ""
-    assert ctx.qa_attempts == 0
+    assert ctx.verification_attempts == 0
     assert ctx.model_assignments == {}
     assert ctx.execution_log == []
 
@@ -56,7 +56,7 @@ def test_task_spec_fields():
 
 
 def test_qa_report_passed():
-    report = QAReport(
+    report = VerificationReport(
         passed=True,
         ruff={"issues": []},
         mypy={"errors": []},

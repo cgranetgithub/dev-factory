@@ -3,7 +3,7 @@
 import tempfile
 from pathlib import Path
 
-from devfactory.context import GitHubIssue, PipelineContext, QAReport, ReviewResult
+from devfactory.context import GitHubIssue, PipelineContext, ReviewResult, VerificationReport
 from devfactory.kb.database import Database
 from devfactory.kb.scorer import Scorer
 
@@ -55,8 +55,8 @@ def test_scorer_flush_qa():
     task_id = db.create_task(42, "owner/repo")
 
     ctx = PipelineContext(issue=make_issue())
-    ctx.log_execution("qa", "qwen2.5:7b", 3000, 500, 200)
-    ctx.qa_report = QAReport(
+    ctx.log_execution("verification", "qwen2.5:7b", 3000, 500, 200)
+    ctx.verification_report = VerificationReport(
         passed=True,
         ruff={"issues": []},
         mypy={"errors": []},
@@ -68,7 +68,7 @@ def test_scorer_flush_qa():
 
     scorer.flush(ctx, task_id)
     stats = db.model_stats()
-    assert any(r["role"] == "qa" for r in stats)
+    assert any(r["role"] == "verification" for r in stats)
 
 
 def test_scorer_flush_reviewer():
@@ -94,15 +94,16 @@ def test_scorer_flush_reviewer():
     assert len(reviewer_stats) > 0
 
 
-def test_scorer_flush_with_qa_report():
-    """Test that quality scores are correctly attributed to developer execution with QA report."""
+def test_scorer_flush_with_verification_report():
+    """Quality scores are attributed to the developer execution, from the
+    verification report."""
     db = make_db()
     scorer = Scorer(database=db)
     task_id = db.create_task(42, "owner/repo")
 
     ctx = PipelineContext(issue=make_issue())
     ctx.log_execution("developer", "qwen2.5:7b", 3000, 500, 200)
-    ctx.qa_report = QAReport(
+    ctx.verification_report = VerificationReport(
         passed=True,
         ruff={"issues": [{"code": "F401", "location": "test.py:1"}]},
         mypy={"errors": []},
@@ -111,15 +112,15 @@ def test_scorer_flush_with_qa_report():
         summary="All good",
         raw_output="{}",
     )
-    ctx.qa_attempts = 2
+    ctx.verification_attempts = 2
 
     scorer.flush(ctx, task_id)
-    
+
     # Check that scores were recorded for the developer execution
     stats = db.model_stats()
     developer_stats = [r for r in stats if r["role"] == "developer"]
     assert len(developer_stats) > 0
-    
+
     # Check the quality scores are present
     score_metrics = [r["metric"] for r in developer_stats]
     assert "tests_pass_rate" in score_metrics
@@ -129,23 +130,23 @@ def test_scorer_flush_with_qa_report():
 
 
 def test_scorer_flush_without_qa_report():
-    """Test that only retry_count is recorded when no QA report is present."""
+    """Test that only retry_count is recorded when no verification report is present."""
     db = make_db()
     scorer = Scorer(database=db)
     task_id = db.create_task(42, "owner/repo")
 
     ctx = PipelineContext(issue=make_issue())
     ctx.log_execution("developer", "qwen2.5:7b", 3000, 500, 200)
-    ctx.qa_report = None
-    ctx.qa_attempts = 3
+    ctx.verification_report = None
+    ctx.verification_attempts = 3
 
     scorer.flush(ctx, task_id)
-    
+
     # Check that only retry_count was recorded for the developer execution
     stats = db.model_stats()
     developer_stats = [r for r in stats if r["role"] == "developer"]
     assert len(developer_stats) > 0
-    
+
     # Check that only retry_count is present (the quality scores are skipped)
     score_metrics = [r["metric"] for r in developer_stats]
     # Only retry_count should be present, not quality scores

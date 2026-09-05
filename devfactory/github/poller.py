@@ -65,7 +65,7 @@ class Poller:
         # Mark on GitHub immediately to prevent double-pickup
         mark_in_progress(self.repo, issue.number)
 
-        from devfactory.orchestrator import Pipeline, QAFailedError
+        from devfactory.orchestrator import Pipeline, VerificationFailedError
 
         pipeline = Pipeline()
 
@@ -76,10 +76,10 @@ class Poller:
                 console.print(f"[bold green]✓ PR ready:[/] {ctx.pr_url}")
             else:
                 logger.warning(f"[poller] pipeline done for #{issue.number} but no PR URL")
-        except QAFailedError as e:
-            # Code produced but QA never passed after all retries → dedicated label
+        except VerificationFailedError as e:
+            # Code produced but verification never passed after all retries → dedicated label
             mark_qa_failed(self.repo, issue.number, str(e))
-            console.print(f"[bold yellow]✗ QA failed on #{issue.number}:[/] {e}")
+            console.print(f"[bold yellow]✗ Verification failed on #{issue.number}:[/] {e}")
         except Exception as e:
             mark_error(self.repo, issue.number, str(e))
             console.print(f"[bold red]✗ Error on #{issue.number}:[/] {e}")

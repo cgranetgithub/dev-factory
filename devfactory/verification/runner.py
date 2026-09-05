@@ -1,6 +1,6 @@
 """
-QA Runner — executes ruff, mypy, bandit, pytest inside a Docker container.
-Returns a structured QAReport.
+Verification Runner — executes ruff, mypy, bandit, pytest inside a Docker container.
+Returns a structured VerificationReport.
 """
 
 from __future__ import annotations
@@ -11,22 +11,22 @@ import subprocess
 from pathlib import Path
 
 from devfactory.config import settings
-from devfactory.context import QAReport
+from devfactory.context import VerificationReport
 
 logger = logging.getLogger(__name__)
 
-# Where the candidate repo is mounted inside the QA container. Tools report their
+# Where the candidate repo is mounted inside the verification container. Tools report their
 # findings under this prefix, but the developer agent works in the host workspace
 # and has no such directory — see _build_summary, which strips it back out.
 CONTAINER_WORKDIR = "/workspace"
 
 
-class QARunner:
+class VerificationRunner:
     def __init__(self, image: str | None = None):
         self.image = image or settings.docker_test_image
 
-    def run(self, repo_path: Path) -> QAReport:
-        """Run full QA suite in Docker and return structured report."""
+    def run(self, repo_path: Path) -> VerificationReport:
+        """Run full verification suite in Docker and return structured report."""
         if not repo_path.exists():
             raise FileNotFoundError(f"Repo path not found: {repo_path}")
 
@@ -47,7 +47,7 @@ class QARunner:
 
         summary = self._build_summary(ruff, mypy, bandit, pytest, passed)
 
-        return QAReport(
+        return VerificationReport(
             passed=passed,
             ruff=ruff,
             mypy=mypy,
@@ -83,7 +83,7 @@ class QARunner:
     def _run_ruff(self, repo_path: Path) -> dict:
         # --no-cache: /workspace is read-only, so ruff cannot create its
         # .ruff_cache there. Without this it crashes and the empty output is
-        # misread as "0 issues" (a false pass). No cache is fine for one-shot QA.
+        # misread as "0 issues" (a false pass). No cache is fine for a one-shot verification run.
         output, code = self._docker_run(
             repo_path, "ruff check . --no-cache --output-format=json 2>/dev/null || true"
         )
@@ -125,7 +125,7 @@ class QARunner:
         return {"findings": results, "severity": top_severity, "returncode": code}
 
     def _run_pytest(self, repo_path: Path) -> dict:
-        # The test container ships only the QA tools, not the project's runtime
+        # The test container ships only the verification tools, not the project's runtime
         # dependencies. Each tool runs in a fresh container, so we install the
         # mounted project (which pulls its declared deps) in the SAME command
         # that runs pytest — otherwise every `import <project>` fails at
@@ -152,7 +152,7 @@ class QARunner:
                 "passed": 0,
                 "failed": 0,
                 "errors": [
-                    "QA environment setup failed: `pip install .` did not complete in "
+                    "verification environment setup failed: `pip install .` did not complete in "
                     "the test container (check the project's dependencies build cleanly)."
                 ],
                 "raw": output,
@@ -179,7 +179,7 @@ class QARunner:
     def _build_summary(
         self, ruff: dict, mypy: dict, bandit: dict, pytest: dict, passed: bool
     ) -> str:
-        lines = ["## QA Report\n"]
+        lines = ["## Verification Report\n"]
         lines.append(f"**Overall: {'✓ PASSED' if passed else '✗ FAILED'}**\n")
 
         ruff_count = len(ruff.get("issues", []))
@@ -208,7 +208,7 @@ class QARunner:
             for err in pytest.get("errors", [])[:5]:
                 lines.append(f"  - [pytest] {err}")
 
-        # The summary is fed back to the developer agent on a QA retry, and that
+        # The summary is fed back to the developer agent on a verification retry, and that
         # agent works in the host workspace — "/workspace/devfactory/foo.py" is a
         # path it cannot resolve. Every tool reports under the container mount, so
         # strip the prefix once here rather than in each parser: the agent then

@@ -28,7 +28,7 @@ class Settings(BaseSettings):
         DEVFACTORY_POLL_INTERVAL   Seconds between GitHub issue polls (default: 60).
         DEVFACTORY_DB_PATH         Path to the SQLite knowledge-base file.
         DEVFACTORY_WORKSPACE       Directory where repositories are cloned.
-        DEVFACTORY_MAX_QA_RETRIES  Max developer→QA loop iterations per issue.
+        DEVFACTORY_MAX_VERIFICATION_RETRIES  Max developer→verification loop iterations per issue.
         DEVFACTORY_LOG_LEVEL       Logging verbosity (DEBUG / INFO / WARNING).
         DEVFACTORY_DEV_BACKEND     How the developer role writes code:
                                      "ollama"   — single-shot LLM call, full-file
@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     poll_interval: int = Field(default=60, alias="DEVFACTORY_POLL_INTERVAL")
     db_path: Path = Field(default=Path("./devfactory.db"), alias="DEVFACTORY_DB_PATH")
     workspace: Path = Field(default=Path("/tmp/devfactory"), alias="DEVFACTORY_WORKSPACE")
-    max_qa_retries: int = Field(default=3, alias="DEVFACTORY_MAX_QA_RETRIES")
+    max_verification_retries: int = Field(default=3, alias="DEVFACTORY_MAX_VERIFICATION_RETRIES")
     log_level: str = Field(default="INFO", alias="DEVFACTORY_LOG_LEVEL")
 
     # Developer backend: "ollama" (single-shot, default) or "opencode" (agentic CLI).

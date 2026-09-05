@@ -44,8 +44,8 @@ You (with Claude Opus)          DevFactory (local)
 Create detailed GitHub Issue    Polls for label ready-for-dev
 Label it ready-for-dev    ───►  AnalystAgent   → structured TaskSpec
                                 DeveloperAgent → writes code (with repo context)
-                                QARunner       → ruff + mypy + bandit + pytest
-                                   ↑ retry up to N times if QA fails
+                                VerificationRunner       → ruff + mypy + bandit + pytest
+                                   ↑ retry up to N times if verification fails
                                 ReviewerAgent  → inline GitHub PR review (model A)
                                 ReviewerAgent  → inline GitHub PR review (model B)
                                 Opens PR + notifies you
@@ -64,10 +64,10 @@ You review & merge        ◄───  PR ready for your review
 4. **Developer writes the code** — Another local LLM generates the implementation.
    It reads the existing repo files to make context-aware changes.
 
-5. **QA validates** — The code is tested in an isolated Docker container: linting (ruff),
+5. **verification runs** — The code is tested in an isolated Docker container: linting (ruff),
    type checking (mypy), security scanning (bandit), and tests (pytest).
-   If QA fails, the developer retries (up to `DEVFACTORY_MAX_QA_RETRIES` times) with
-   the QA report as feedback.
+   If verification fails, the developer retries (up to `DEVFACTORY_MAX_VERIFICATION_RETRIES` times) with
+   the verification report as feedback.
 
 6. **Two reviewers** — Two different models post inline code review comments on the PR
    using the GitHub Review API.
@@ -125,7 +125,7 @@ caught the error. Autonomy scales down as safety class scales up.
                                │
         ┌──────────┬───────────┼──────────┬────────────┐
         ▼          ▼           ▼          ▼            ▼
-   Analyst     Developer     QA         Reviewer    Scorer
+   Analyst     Developer   Verification  Reviewer    Scorer
    Agent       Agent         Agent      Agent       (SQLite)
         │          │           │
         ▼          ▼           ▼
@@ -148,7 +148,7 @@ caught the error. Autonomy scales down as safety class scales up.
 ### Pipeline state
 
 All agents share a `PipelineContext` dataclass — a single object passed through the
-entire pipeline. It holds the issue, the task spec, QA reports, review results, commits,
+entire pipeline. It holds the issue, the task spec, verification reports, review results, commits,
 and execution logs. Nothing is global; everything is traceable.
 
 ### Model rotation
@@ -161,7 +161,7 @@ Two constraints narrow the random draw:
 
 - **Reviewer diversity** — the reviewer sets `avoid_repeated_model = True`, so the second
   review pass skips the model used by the first and offers a genuinely different
-  perspective. Other roles reuse their model freely (the developer *must*, so that a QA
+  perspective. Other roles reuse their model freely (the developer *must*, so that a verification
   retry keeps the model that already has the context).
 - **Agentic-loop capability** — with the `opencode` developer backend the model has to
   actually drive a tool-calling loop. Ollama's `tools` capability flag is necessary but
@@ -186,7 +186,7 @@ set `OLLAMA_CONTEXT_LENGTH=32768` (or more) in the Ollama service environment.
 | Requirement | Version | Notes |
 |---|---|---|
 | Python | 3.11+ | |
-| Docker | any recent | For the QA isolation container |
+| Docker | any recent | For the verification isolation container |
 | Ollama | latest | Running locally, at least one model pulled |
 | GitHub | — | Personal access token with `repo` + `pull_request` scopes |
 | GPU | recommended | RTX 3090 24 GB VRAM or equivalent — the registry targets 20–30B models |
@@ -235,12 +235,12 @@ cp .env.example .env
 | `DEVFACTORY_POLL_INTERVAL` | `60` | Seconds between GitHub polls |
 | `DEVFACTORY_DB_PATH` | `./devfactory.db` | SQLite knowledge-base path |
 | `DEVFACTORY_WORKSPACE` | `/tmp/devfactory` | Directory where repos are cloned |
-| `DEVFACTORY_MAX_QA_RETRIES` | `3` | Max Developer → QA loop iterations |
+| `DEVFACTORY_MAX_VERIFICATION_RETRIES` | `3` | Max Developer → verification loop iterations |
 | `DEVFACTORY_LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` |
 | `DEVFACTORY_DEV_BACKEND` | `ollama` | Developer backend: `ollama` (single-shot) or `opencode` (agentic CLI) |
 | `OPENCODE_BIN` | `~/.opencode/bin/opencode` | OpenCode CLI path — used only by the `opencode` backend |
 | `OPENCODE_TIMEOUT_S` | `1800` | Seconds before an OpenCode run is killed |
-| `DOCKER_TEST_IMAGE` | `devfactory-test:latest` | Name of the pre-built QA image |
+| `DOCKER_TEST_IMAGE` | `devfactory-test:latest` | Name of the pre-built verification image |
 
 ---
 
@@ -249,7 +249,7 @@ cp .env.example .env
 Run the `init` command once per repository. It:
 
 1. Creates the DevFactory labels in your GitHub repo.
-2. Builds the Docker QA image.
+2. Builds the Docker verification image.
 3. Checks that Ollama is reachable.
 4. Initialises the SQLite database.
 
@@ -308,7 +308,7 @@ DevFactory manages these labels automatically:
 | `ready-for-dev` | **You set this** — triggers the pipeline |
 | `devfactory:in-progress` | Pipeline is running |
 | `devfactory:ready-for-review` | PR is open, ready for your review |
-| `devfactory:qa-failed` | QA exhausted all retries |
+| `devfactory:verification-failed` | Verification exhausted all retries |
 | `devfactory:error` | Pipeline crashed (check logs) |
 
 ---
@@ -345,7 +345,7 @@ Models below ~20B are deliberately not registered: they cost more retries than t
 |---|---|---|
 | `analyst` | `AnalystAgent` | Parses issue → structured `TaskSpec` |
 | `developer` | `DeveloperAgent` | Generates/modifies code |
-| `qa` | `QAAgent` | Interprets Docker QA results (no LLM call currently) |
+| `verification` | `VerificationAgent` | Runs ruff + mypy + bandit + pytest in Docker (no LLM call) |
 | `reviewer` | `ReviewerAgent` | Code review → inline GitHub PR comments |
 
 ---
@@ -373,7 +373,7 @@ scores      (id, execution_id, metric, value, notes, created_at)
 | `security_score` | bandit severity | 0.2 / 0.5 / 0.8 / 1.0 |
 | `review_verdict` | reviewer verdict | 0.3 / 0.6 / 1.0 |
 | `review_quality` | reviewer self-score | 0.0 – 1.0 |
-| `retry_count` | QA iterations | 0, 1, 2, … |
+| `retry_count` | Verification iterations | 0, 1, 2, … |
 
 After enough pipeline runs you get an objective, data-driven ranking of which local
 models perform best for which roles — without any subjective opinion.
@@ -389,10 +389,11 @@ devfactory/
 │   │   ├── base.py          # BaseAgent: model selection, prompt loading, LLM call
 │   │   ├── analyst.py       # Issue → TaskSpec (JSON)
 │   │   ├── developer.py     # TaskSpec → code files
-│   │   ├── qa.py            # Orchestrates the Docker QA runner
-│   │   └── reviewer.py      # Diff + QA → inline GitHub review
-│   ├── qa/
-│   │   └── runner.py        # Docker QA execution (ruff/mypy/bandit/pytest)
+│   │   ├── verification.py  # Orchestrates the Docker verification runner
+│   │   └── reviewer.py      # Diff + verification → inline GitHub review
+│   ├── verification/
+│   │   ├── autofix.py       # Deterministic ruff pass before the gate
+│   │   └── runner.py        # Docker verification execution (ruff/mypy/bandit/pytest)
 │   ├── github/
 │   │   ├── client.py        # Lazy PyGitHub singleton
 │   │   ├── git_ops.py       # Clone, branch, commit, push (GitPython)
@@ -420,7 +421,7 @@ devfactory/
 │   ├── developer.md         # Developer system prompt
 │   └── reviewer.md          # Reviewer system prompt
 ├── docker/
-│   └── Dockerfile.test      # QA test environment
+│   └── Dockerfile.test      # Verification test environment
 ├── docs/
 │   └── VISION.md            # Product direction + compliance architecture & roadmap
 ├── tests/                   # Unit tests (no Ollama or GitHub required)
@@ -461,7 +462,7 @@ The phased plan (P0 → P3) and its exit evidence live in [docs/VISION.md](docs/
 - [ ] **Parallel pipeline** — run multiple issues concurrently
 - [ ] **Web dashboard** — visualise KB stats and pipeline runs in the browser
 - [ ] **Integration tests** — end-to-end tests against a test GitHub repository
-- [ ] **Multi-language projects** — extend QA runner for Node.js, Go, Rust
+- [ ] **Multi-language projects** — extend verification runner for Node.js, Go, Rust
 - [ ] **Architect agent** — decompose large issues into sub-tasks automatically
 - [ ] **Auto-merge** — optional automatic merge when all reviewers approve
       *(kept off for regulated work: the human gate is the control)*
