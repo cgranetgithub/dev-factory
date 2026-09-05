@@ -97,6 +97,21 @@ class DeveloperAgent(BaseAgent):
                 f"{ctx.verification_report.summary}"
             )
 
+        # On rejection: the reviewer read the change and sent it back. Its comments
+        # are about intent and design, not mechanics — verification already covers
+        # those — so they are shown separately rather than merged into one list.
+        if ctx.review_rejections > 0 and ctx.review_results:
+            review = ctx.review_results[-1]
+            comments = "\n".join(
+                f"- {c.get('path', '?')}:{c.get('line', '?')} — {c.get('body', '')}"
+                for c in review.inline_comments
+            )
+            parts.append(
+                f"\n## Review Feedback (rejection {ctx.review_rejections})\n"
+                f"A reviewer read the change and requested modifications.\n\n"
+                f"{review.summary}\n\n{comments}"
+            )
+
         parts.append(
             "\n## Instructions\n"
             "Return your implementation as a series of file blocks.\n"
@@ -241,6 +256,21 @@ class DeveloperAgent(BaseAgent):
                 f"\n## Verification Feedback (attempt {ctx.verification_attempts})\n"
                 f"The previous implementation failed verification. Fix the following issues:\n\n"
                 f"{ctx.verification_report.summary}"
+            )
+
+        # On rejection: the reviewer read the change and sent it back. Its comments
+        # are about intent and design, not mechanics — verification already covers
+        # those — so they are shown separately rather than merged into one list.
+        if ctx.review_rejections > 0 and ctx.review_results:
+            review = ctx.review_results[-1]
+            comments = "\n".join(
+                f"- {c.get('path', '?')}:{c.get('line', '?')} — {c.get('body', '')}"
+                for c in review.inline_comments
+            )
+            parts.append(
+                f"\n## Review Feedback (rejection {ctx.review_rejections})\n"
+                f"A reviewer read the change and requested modifications.\n\n"
+                f"{review.summary}\n\n{comments}"
             )
 
         return "\n".join(parts)

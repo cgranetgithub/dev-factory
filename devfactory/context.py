@@ -72,6 +72,14 @@ class PipelineContext:
 
     # Tracking
     verification_attempts: int = 0
+    # Times the reviewer sent the change back to the developer. Counted separately
+    # from verification failures — they are different gates and the distinction
+    # matters in the record — but they share one budget of developer iterations.
+    review_rejections: int = 0
+    # True when the budget ran out with the reviewer still requesting changes: the
+    # PR is opened anyway for the human to arbitrate, and this keeps the unsatisfied
+    # gate visible instead of silently dropping it.
+    review_unresolved: bool = False
     # Lint issues the developer left behind, one entry per attempt, measured before
     # autofix cleans them. Without this the pipeline would tidy up after the model
     # and then score the tidied result — the developer's own hygiene must stay
@@ -82,6 +90,15 @@ class PipelineContext:
 
     # Execution log (for KB scoring)
     execution_log: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def iterations_used(self) -> int:
+        """Developer iterations consumed, whichever gate sent the change back.
+
+        Both gates draw on the same budget: a change that alternates between failing
+        verification and being sent back by the reviewer must still terminate.
+        """
+        return self.verification_attempts + self.review_rejections
 
     def log_execution(
         self,

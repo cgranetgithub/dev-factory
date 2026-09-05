@@ -59,8 +59,8 @@ class Pipeline:
             self._setup_git(ctx)
             db.update_task(task_id, branch_name=ctx.branch_name)
 
-            # ── 3. Developer → verification loop ────────────────────────────────────────
-            ctx = self._dev_qa_loop(ctx, task_id)
+            # ── 3. Developer → verification → review loop ─────────────────────
+            ctx = self._build_loop(ctx, task_id)
 
             # ── 4. Git: push branch ───────────────────────────────────────────
             self._push_branch(ctx)
@@ -68,9 +68,8 @@ class Pipeline:
             # ── 5. Create PR ──────────────────────────────────────────────────
             ctx = self._create_pr(ctx, task_id)
 
-            # ── 6. Reviewer × 2 (different models via exclude list) ───────────
-            diff = self._get_diff(ctx)
-            ctx = self._run_reviewers(ctx, diff)
+            # ── 6. Publish the review that governed the accepted iteration ────
+            self._publish_review(ctx)
 
             # ── 7. Human notification (via issue comment + label) ─────────────
             # Done by poller.mark_ready_for_review after pipeline returns
@@ -107,7 +106,18 @@ class Pipeline:
         git_ops.setup_branch(ctx)
         logger.info(f"[pipeline] branch ready: {ctx.branch_name}")
 
-    def _dev_qa_loop(self, ctx: PipelineContext, task_id: int) -> PipelineContext:
+    def _build_loop(self, ctx: PipelineContext, task_id: int) -> PipelineContext:
+        """Developer → verification → review, until both gates are satisfied.
+
+        Two gates, in this order on purpose. Verification is deterministic and takes
+        a couple of minutes; the review costs a model call. Sending code that does not
+        even pass its own tests to a reviewer spends the expensive resource on what the
+        cheap one already found — and the reviewer then wastes its judgement on
+        mechanics instead of on whether the change actually does what the issue asked.
+
+        Both gates draw on one shared budget of developer iterations, so a change
+        cannot ping-pong between them indefinitely.
+        """
         from devfactory.config import settings
         from devfactory.github import git_ops
         from devfactory.github.git_ops import _workspace_path
@@ -125,29 +135,56 @@ class Pipeline:
                 autofix(_workspace_path(ctx), git_ops.changed_python_files(ctx))
             )
 
-            git_ops.commit_changes(ctx, attempt=ctx.verification_attempts + 1)
+            git_ops.commit_changes(ctx, attempt=ctx.iterations_used + 1)
 
+            # ── Gate 1: verification (deterministic) ──────────────────────────
             ctx = self.verification.execute(ctx)
-
-            attempt = ctx.verification_attempts + 1
             report = ctx.verification_report
 
-            if report and report.passed:
-                logger.info(f"[pipeline] Verification passed after {attempt} attempt(s)")
+            if not (report and report.passed):
+                ctx.verification_attempts += 1
+                if ctx.iterations_used >= max_retries:
+                    db.update_task(task_id, status="verification_failed")
+                    raise VerificationFailedError(
+                        f"Verification failed after {max_retries} attempt(s) "
+                        f"on issue #{ctx.issue.number}.\n"
+                        f"Last report:\n{report.summary if report else 'N/A'}"
+                    )
+                logger.warning(
+                    f"[pipeline] Verification failed — "
+                    f"iteration {ctx.iterations_used}/{max_retries}"
+                )
+                continue
+
+            logger.info(f"[pipeline] Verification passed on iteration {ctx.iterations_used + 1}")
+
+            # ── Gate 2: review (judgement) ────────────────────────────────────
+            ctx.diff = self._get_diff(ctx)
+            ctx = self.reviewer.execute(ctx)
+            verdict = ctx.review_results[-1].verdict if ctx.review_results else "commented"
+
+            if verdict != "changes_requested":
+                logger.info(f"[pipeline] Review verdict={verdict} — proceeding to PR")
                 return ctx
 
-            ctx.verification_attempts += 1
+            ctx.review_rejections += 1
 
-            if ctx.verification_attempts >= max_retries:
-                db.update_task(task_id, status="verification_failed")
-                raise VerificationFailedError(
-                    f"Verification failed after {max_retries} attempt(s) "
-                    f"on issue #{ctx.issue.number}.\n"
-                    f"Last report:\n{report.summary if report else 'N/A'}"
+            if ctx.iterations_used >= max_retries:
+                # The code passes verification; only the reviewer is unsatisfied.
+                # Blocking here would produce nothing at all, so the change goes to
+                # the PR with the unresolved review attached and the human decides.
+                # Recorded loudly rather than dropped: a gate that was not satisfied
+                # must remain visible in the evidence.
+                logger.warning(
+                    f"[pipeline] Review still requests changes after {max_retries} "
+                    f"iteration(s) — opening the PR with the review unresolved"
                 )
+                ctx.review_unresolved = True
+                return ctx
 
             logger.warning(
-                f"[pipeline] Verification failed — retry {ctx.verification_attempts}/{max_retries}"
+                f"[pipeline] Review requested changes — "
+                f"iteration {ctx.iterations_used}/{max_retries}"
             )
 
     def _push_branch(self, ctx: PipelineContext):
@@ -170,11 +207,18 @@ class Pipeline:
 
         return git_ops.get_diff(ctx)
 
-    def _run_reviewers(self, ctx: PipelineContext, diff: str) -> PipelineContext:
-        ctx.diff = diff
+    def _publish_review(self, ctx: PipelineContext):
+        """Post the review that governed the accepted iteration onto the PR.
 
-        # First reviewer
-        ctx = self.reviewer.execute(ctx)
+        The review already did its work inside the loop — it decided whether the
+        change could proceed. Publishing it here makes that decision visible at the
+        point where the human approver acts, instead of leaving it in a log. What is
+        published is exactly what drove the decision, not a fresh opinion written
+        afterwards about code that was already accepted.
+        """
+        if not ctx.review_results or ctx.pr_number is None:
+            return
 
-        # Second reviewer — router will exclude the first model
-        return self.reviewer.execute(ctx)
+        from devfactory.github.review import post_review
+
+        post_review(ctx, ctx.review_results[-1])

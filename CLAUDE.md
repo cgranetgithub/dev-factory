@@ -3,7 +3,7 @@
 ## Project overview
 
 DevFactory is a local AI-powered software factory that processes GitHub issues through a
-sequential SDLC pipeline: Analyst → Developer → Verification → Reviewer → PR.
+sequential SDLC pipeline: Analyst → Developer → Verification → Review → PR.
 It runs entirely on local LLMs served by Ollama.
 
 **Direction — read [`docs/VISION.md`](docs/VISION.md) before proposing architecture.**
@@ -100,14 +100,18 @@ Poller detects label ready-for-dev
   → Pipeline.run(issue)
       1. AnalystAgent   → TaskSpec (JSON)
       2. git_ops.setup_branch
-      3. loop (max DEVFACTORY_MAX_VERIFICATION_RETRIES):
+      3. loop (shared budget: DEVFACTORY_MAX_VERIFICATION_RETRIES iterations):
            DeveloperAgent → writes files to workspace
+           autofix (ruff --fix + format on the touched files)
            git_ops.commit_changes
-           VerificationRunner (Docker) → VerificationReport
-           if passed: break
+           gate 1 — VerificationRunner (Docker) → VerificationReport
+             if it fails: back to the developer
+           gate 2 — ReviewerAgent → verdict on the diff vs the acceptance criteria
+             if changes_requested: back to the developer
+           both satisfied: break
       4. git_ops.push_branch
       5. create_or_update_pr
-      6. ReviewerAgent × 2 (different models)
+      6. post the review that governed the accepted iteration onto the PR
       7. scorer.flush → SQLite KB
   → mark_ready_for_review (issue comment + label)
 ```
