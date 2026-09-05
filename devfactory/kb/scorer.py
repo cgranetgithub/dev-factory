@@ -62,10 +62,27 @@ class Scorer:
         pass_rate = r.pytest["passed"] / total if total > 0 else (1.0 if r.passed else 0.0)
         self._db.record_score(exec_id, "tests_pass_rate", pass_rate)
 
-        # lint_score: 0.0 (many issues) → 1.0 (clean)
+        # lint_score: 0.0 (many issues) → 1.0 (clean). Measured on the verification
+        # report, i.e. AFTER autofix — this is the state of the code that reached the
+        # gate, not the state the developer delivered. See lint_left_behind below.
         ruff_issues = len(r.ruff.get("issues", []))
         lint_score = max(0.0, 1.0 - ruff_issues * 0.05)
-        self._db.record_score(exec_id, "lint_score", lint_score, f"{ruff_issues} ruff issues")
+        self._db.record_score(
+            exec_id, "lint_score", lint_score, f"{ruff_issues} ruff issues after autofix"
+        )
+
+        # lint_left_behind: what the developer itself failed to clean up, measured
+        # before autofix ran. This is the honest signal about the model — a model that
+        # runs ruff as instructed scores 0 here, one that ignores its definition of
+        # done does not. Entries are one per attempt; None means unmeasured.
+        measured = [n for n in ctx.lint_left_behind if n is not None]
+        if measured:
+            self._db.record_score(
+                exec_id,
+                "lint_left_behind",
+                float(measured[-1]),
+                f"issues left for autofix, per attempt: {ctx.lint_left_behind}",
+            )
 
         # security: bandit severity → score
         severity_map = {"LOW": 0.8, "MEDIUM": 0.5, "HIGH": 0.2, "none": 1.0}

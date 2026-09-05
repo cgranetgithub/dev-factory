@@ -72,6 +72,11 @@ class PipelineContext:
 
     # Tracking
     verification_attempts: int = 0
+    # Lint issues the developer left behind, one entry per attempt, measured before
+    # autofix cleans them. Without this the pipeline would tidy up after the model
+    # and then score the tidied result — the developer's own hygiene must stay
+    # visible. None means the measurement could not be taken.
+    lint_left_behind: list[int | None] = field(default_factory=list)
     model_assignments: dict[str, str] = field(default_factory=dict)
     # {"analyst": "qwen2.5-coder:14b", "developer": "deepseek-coder-v2:16b", ...}
 

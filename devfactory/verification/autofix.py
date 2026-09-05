@@ -17,6 +17,7 @@ whole repository would bury the real change under unrelated reformatting.
 
 from __future__ import annotations
 
+import json
 import logging
 import subprocess
 from pathlib import Path
@@ -30,7 +31,13 @@ logger = logging.getLogger(__name__)
 _TIMEOUT_S = 120
 
 
-def autofix(repo_path: Path, files: list[str], image: str | None = None) -> bool:
+# Wraps the "before" measurement so it can be parsed out of the combined output of
+# the three ruff invocations.
+_MARK_OPEN = "##DEVFACTORY_LINT_BEFORE##"
+_MARK_CLOSE = "##DEVFACTORY_LINT_END##"
+
+
+def autofix(repo_path: Path, files: list[str], image: str | None = None) -> int | None:
     """
     Apply ruff's safe fixes and formatter to ``files`` inside ``repo_path``.
 
@@ -41,21 +48,33 @@ def autofix(repo_path: Path, files: list[str], image: str | None = None) -> bool
         image:     Docker image to use; defaults to the verification image.
 
     Returns:
-        True if ruff ran (whether or not it changed anything), False if it could
-        not run at all. A failure here is never fatal: verification still runs afterwards and
-        will report whatever is left.
+        How many lint issues the developer left behind — measured *before* fixing
+        anything, so it says what the model delivered rather than what the pipeline
+        salvaged. ``None`` if ruff could not run at all, or if nothing changed. A
+        failure here is never fatal: verification still runs afterwards and will
+        report whatever is left.
     """
     if not files:
         logger.info("[autofix] no Python files changed — skipping")
-        return False
+        return None
 
     quoted = " ".join(f"'{f}'" for f in files)
+    # Measure first, then fix. Without the measurement the developer's own lint
+    # hygiene becomes invisible: the pipeline would clean up after the model and
+    # then score the cleaned result, flattering it.
+    #
     # --no-cache: the cache would be written into the mounted checkout and then
-    # committed. Two separate steps: `check --fix` applies safe lint fixes (import
-    # sorting, unused imports, else-after-return), `format` handles layout and line
-    # length. Neither must abort the chain, hence `|| true` — the verification gate is what
-    # decides pass or fail, not this step.
-    cmd = f"ruff check --fix --no-cache {quoted} || true; ruff format --no-cache {quoted} || true"
+    # committed. Two separate fix steps: `check --fix` applies safe lint fixes
+    # (import sorting, unused imports, else-after-return), `format` handles layout
+    # and line length. None of them must abort the chain, hence `|| true` — the
+    # verification gate is what decides pass or fail, not this step.
+    cmd = (
+        f"echo '{_MARK_OPEN}'; "
+        f"ruff check --no-cache --output-format=json {quoted} 2>/dev/null || true; "
+        f"echo '{_MARK_CLOSE}'; "
+        f"ruff check --fix --no-cache {quoted} || true; "
+        f"ruff format --no-cache {quoted} || true"
+    )
     full_cmd = [
         "docker",
         "run",
@@ -75,10 +94,38 @@ def autofix(repo_path: Path, files: list[str], image: str | None = None) -> bool
     except (subprocess.TimeoutExpired, FileNotFoundError) as e:
         # Docker missing or hung: log and continue. verification will surface the lint issues.
         logger.warning(f"[autofix] could not run ruff ({e}) — continuing without it")
-        return False
+        return None
 
-    output = (result.stdout + result.stderr).strip()
-    logger.info(f"[autofix] ruff applied to {len(files)} file(s)")
-    if output:
-        logger.debug(f"[autofix] {output}")
-    return True
+    output = result.stdout + result.stderr
+    left_behind = _parse_issue_count(output)
+
+    if left_behind is None:
+        logger.info(f"[autofix] ruff applied to {len(files)} file(s)")
+    else:
+        logger.info(
+            f"[autofix] ruff applied to {len(files)} file(s) — "
+            f"the developer left {left_behind} lint issue(s) behind"
+        )
+    logger.debug(f"[autofix] {output.strip()}")
+    return left_behind
+
+
+def _parse_issue_count(output: str) -> int | None:
+    """Extract the pre-fix ruff issue count from the marked section of the output.
+
+    Returns None when the section is missing or unparseable — an unknown count must
+    not be scored as a clean zero.
+    """
+    try:
+        block = output.split(_MARK_OPEN, 1)[1].split(_MARK_CLOSE, 1)[0].strip()
+    except IndexError:
+        logger.warning("[autofix] could not locate the lint measurement in ruff's output")
+        return None
+
+    if not block.startswith("["):
+        return None
+    try:
+        return len(json.loads(block))
+    except json.JSONDecodeError:
+        logger.warning("[autofix] could not parse the lint measurement")
+        return None
