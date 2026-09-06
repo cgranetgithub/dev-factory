@@ -53,9 +53,11 @@ class ModelMeta:
 #     so the third slot is filled by a strong DENSE general model. NOTE: neither
 #     of those two can drive the "opencode" agentic loop (see drives_agentic_loop);
 #     they serve as reviewers and as single-shot "ollama"-backend developers.
-#     The agentic drivers are qwen3-coder plus, unexpectedly, all three general
-#     models — so an agentic role can be staffed by a model that is not the
-#     developer's, which is what keeps reviewer and developer separable.
+#     The agentic drivers are qwen3-coder plus all three general models, so the
+#     coding/general split no longer decides who can develop: capability does.
+#     Two of the generalists (gemma4, glm-4.7-flash) therefore also carry the
+#     developer role, giving it three drivers instead of one — and leaving a
+#     reviewer that is never forced to be the developer's own model.
 #   * 3 strong general models → the "analyst" role reasons about the issue and
 #     benefits from broad reasoning rather than pure code fluency.
 # The "reviewer" role draws from ALL six, so the two reviewers can pair a coder
@@ -79,6 +81,11 @@ _CODING_ROLES = ["developer", "reviewer"]
 # the top open-weight families (the true GLM-4.7 / Qwen3 flagships are 200B+ and
 # do not fit on this host).
 _GENERAL_ROLES = ["analyst", "reviewer"]
+# General models that also qualified as agentic drivers, and are fast enough to
+# sit in a loop that may run three times behind two gates. They take the
+# developer role as well, which is what gives that role redundancy: without them
+# a single unavailable model takes the whole factory offline.
+_GENERAL_AND_DEV_ROLES = ["analyst", "developer", "reviewer"]
 
 MODELS: list[ModelMeta] = [
     # ── Coding-specialised (developer + reviewer) ──────────────────────────────
@@ -126,7 +133,7 @@ MODELS: list[ModelMeta] = [
         name="glm-4.7-flash:latest",
         parameters_b=32,
         context_k=32,
-        roles=_GENERAL_ROLES,
+        roles=_GENERAL_AND_DEV_ROLES,
         # Qualified 4/4 on both trials (88s, 42s). Being a general model, it gives
         # the reviewer role an agentic driver that is NOT the developer's model —
         # which is what makes an exploring reviewer possible without collapsing the
@@ -144,7 +151,9 @@ MODELS: list[ModelMeta] = [
         context_k=32,
         roles=_GENERAL_ROLES,
         # Qualified 4/4 on both trials, but the slowest that passes: 670s then 153s.
-        # Usable, and a poor default while the budget is three iterations.
+        # Kept OUT of the developer role for that reason alone: three iterations
+        # behind two gates would put a single issue in the half-hour range. Still a
+        # reviewer, where it runs once.
         drives_agentic_loop=True,
         notes="Qwen3.6 27B dense. Latest Qwen general model, safe VRAM margin.",
     ),
@@ -152,7 +161,7 @@ MODELS: list[ModelMeta] = [
         name="gemma4:26b",
         parameters_b=26,
         context_k=32,
-        roles=_GENERAL_ROLES,
+        roles=_GENERAL_AND_DEV_ROLES,
         # Qualified 4/4 on both trials (64s, 46s), second fastest overall. Works in
         # many small steps (25-35 where others take 9) — a different method, same
         # outcome; step count is not a quality signal.

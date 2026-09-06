@@ -34,10 +34,11 @@ def test_unknown_model_is_rejected():
 
 
 def test_model_that_does_not_declare_the_role_is_rejected():
-    """gemma4 is an analyst/reviewer model — pinning it as developer must fail
-    loudly rather than produce a run nobody can interpret."""
+    """qwen3.6:27b is analyst/reviewer only — too slow to sit in the developer
+    loop. Pinning it there must fail loudly rather than produce a run nobody can
+    interpret."""
     with pytest.raises(ValueError, match="does not declare"):
-        Pipeline._resolve_overrides({"developer": "gemma4:26b"})
+        Pipeline._resolve_overrides({"developer": "qwen3.6:27b"})
 
 
 def test_every_qualified_driver_is_pinnable_for_its_roles():
