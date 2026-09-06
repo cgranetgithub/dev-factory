@@ -291,3 +291,86 @@ def test_post_review_fallback_to_issue_comment():
 
     # Should have fallen back to issue comment
     mock_pr.create_issue_comment.assert_called_once()
+
+
+def test_post_review_verdict_mapping():
+    """Test that post_review correctly maps verdicts to events."""
+
+    mock_repo = mock.MagicMock()
+    mock_issue = mock.MagicMock()
+    mock_repo.get_issue.return_value = mock_issue
+    mock_issue.create_comment.return_value = mock.MagicMock()
+
+    mock_pr = mock.MagicMock()
+    mock_pr.create_review.return_value = mock.MagicMock()
+    mock_repo.get_pull.return_value = mock_pr
+
+    mock_gh = mock.MagicMock()
+    mock_gh.get_repo.return_value = mock_repo
+
+    # Mock the context
+    ctx = PipelineContext(
+        issue=mock.MagicMock(),
+        pr_number=123,
+        diff="",
+        task_spec=None,
+        verification_report=None,
+        review_results=[],
+    )
+
+    # Test approved verdict
+    result_approved = ReviewResult(
+        model="test-model",
+        verdict="approved",
+        summary="Good code quality",
+        inline_comments=[],
+        score=0.9,
+    )
+
+    with mock.patch("devfactory.github.review.gh", mock_gh):
+        post_review(ctx, result_approved)
+
+    # Should call create_review with APPROVE event
+    mock_pr.create_review.assert_called()
+    call_args = mock_pr.create_review.call_args
+    assert call_args[1]["event"] == "APPROVE"
+
+    # Test changes_requested verdict
+    result_changes_requested = ReviewResult(
+        model="test-model",
+        verdict="changes_requested",
+        summary="Needs fixes",
+        inline_comments=[],
+        score=0.4,
+    )
+
+    # Reset calls
+    mock_pr.create_review.reset_mock()
+
+    with mock.patch("devfactory.github.review.gh", mock_gh):
+        post_review(ctx, result_changes_requested)
+
+    # Should call create_review with REQUEST_CHANGES event
+    mock_pr.create_review.assert_called()
+    call_args = mock_pr.create_review.call_args
+    assert call_args[1]["event"] == "REQUEST_CHANGES"
+
+    # Test commented verdict (default)
+    result_commented = ReviewResult(
+        model="test-model",
+        verdict="commented",
+        summary="General comment",
+        inline_comments=[],
+        score=0.5,
+    )
+
+    # Reset calls
+    mock_pr.create_review.reset_mock()
+
+    with mock.patch("devfactory.github.review.gh", mock_gh):
+        post_review(ctx, result_commented)
+
+    # Should call create_review with COMMENT event
+    mock_pr.create_review.assert_called()
+    call_args = mock_pr.create_review.call_args
+    assert call_args[1]["event"] == "COMMENT"

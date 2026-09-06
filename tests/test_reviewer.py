@@ -12,7 +12,6 @@ def test_parse_review_wellformed_json():
     """Test that reviewer parses well-formed JSON correctly."""
 
     # Test the logic directly without model instantiation
-    # This avoids the issue with model property requiring execute() to be called
 
     # Valid JSON payload without code block
     valid_json = """
@@ -185,7 +184,17 @@ def test_build_user_prompt():
     ctx.verification_report = mock.MagicMock()
     ctx.verification_report.summary = "All tests passed"
 
-    ctx.diff = "diff --git a/test.py b/test.py\nindex 123..456\n--- a/test.py\n+++ b/test.py\n@@ -1,3 +1,3 @@\n line1\n-line2\n+line2 modified\n line3"
+    ctx.diff = (
+        "diff --git a/test.py b/test.py\n"
+        "index 123..456\n"
+        "--- a/test.py\n"
+        "+++ b/test.py\n"
+        "@@ -1,3 +1,3 @@\n"
+        " line1\n"
+        "-line2\n"
+        "+line2 modified\n"
+        " line3"
+    )
 
     prompt = agent._build_user_prompt(ctx)
 
@@ -204,3 +213,88 @@ def test_reviewer_agent_instantiation():
     agent = ReviewerAgent(model=mock.MagicMock())
     assert agent is not None
     assert agent.role == "reviewer"
+
+
+def test_parse_review_empty_json():
+    """Test that reviewer handles empty JSON gracefully."""
+
+    # Test the logic directly without model instantiation
+
+    # Empty JSON
+    empty = "{}"
+
+    # Import the module and test the function directly
+    from devfactory.agents.reviewer import ReviewerAgent
+
+    agent = ReviewerAgent(model=mock.MagicMock())
+    # Override the model property to avoid the error
+    agent._model = mock.MagicMock()
+    agent._model.name = "test-model"
+
+    result = agent._parse_review(empty)
+
+    assert result.model == "test-model"
+    assert result.verdict == "commented"
+    assert result.score == 0.5
+    assert result.summary == ""
+
+
+def test_parse_review_valid_json_with_extra_text():
+    """Test that reviewer correctly handles JSON when there's extra text around it."""
+
+    # Test the logic directly without model instantiation
+
+    # Valid JSON with extra text - but this should fail because it's missing code block
+    # The current regex pattern expects fenced code blocks
+    json_with_text = """
+Some introductory text that should be ignored.
+{
+    "verdict": "approved",
+    "summary": "Good code quality",
+    "score": 0.9,
+    "inline_comments": []
+}
+Some trailing text that should be ignored.
+"""
+
+    # Import the module and test the function directly
+    from devfactory.agents.reviewer import ReviewerAgent
+
+    agent = ReviewerAgent(model=mock.MagicMock())
+    # Override the model property to avoid the error
+    agent._model = mock.MagicMock()
+    agent._model.name = "test-model"
+
+    result = agent._parse_review(json_with_text)
+
+    # Since there are no code blocks, it should fail to parse and return commented verdict
+    assert result.model == "test-model"
+    assert result.verdict == "commented"
+    assert result.score == 0.5
+
+
+def test_parse_review_no_json_in_block():
+    """Test parsing when there are code blocks but no JSON in them."""
+
+    # Test the logic directly without model instantiation
+
+    # Text in code blocks without valid JSON
+    no_json_block = """
+```
+This is not JSON
+```
+"""
+
+    # Import the module and test the function directly
+    from devfactory.agents.reviewer import ReviewerAgent
+
+    agent = ReviewerAgent(model=mock.MagicMock())
+    # Override the model property to avoid the error
+    agent._model = mock.MagicMock()
+    agent._model.name = "test-model"
+
+    result = agent._parse_review(no_json_block)
+
+    assert result.model == "test-model"
+    assert result.verdict == "commented"
+    assert result.score == 0.5
