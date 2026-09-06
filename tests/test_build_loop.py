@@ -65,6 +65,7 @@ def pipeline(monkeypatch, tmp_path):
     from devfactory.verification import autofix as autofix_module
 
     monkeypatch.setattr(settings, "workspace", tmp_path)
+    monkeypatch.setattr(git_ops, "has_changes", lambda ctx: True)
     monkeypatch.setattr(git_ops, "commit_changes", lambda ctx, attempt=1: "sha")
     monkeypatch.setattr(git_ops, "changed_python_files", lambda ctx: [])
     monkeypatch.setattr(git_ops, "get_diff", lambda ctx: "diff")
