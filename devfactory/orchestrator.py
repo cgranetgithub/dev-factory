@@ -147,10 +147,15 @@ class Pipeline:
                     # Apply the devfactory:error label on the issue
                     from devfactory.github import client
 
-                    issue = ctx.issue
-                    client.gh.issue(issue.repo_owner, issue.repo_name).add_labels(
-                        "devfactory:error"
-                    )
+                    # Try to add label, but catch potential errors (no GitHub token)
+                    try:
+                        issue = ctx.issue
+                        client.gh.get_issue(issue.repo, issue.number).add_labels("devfactory:error")
+                    except Exception:
+                        # If we can't access GitHub, that's okay, we still want to fail cleanly
+                        logger.warning(
+                            "[pipeline] Could not add error label to issue (no GitHub access)"
+                        )
                     raise VerificationFailedError(
                         "Developer produced no changes - the developer agent did not create "
                         "or modify any files, which would cause a GitHub 422 error if we tried "
