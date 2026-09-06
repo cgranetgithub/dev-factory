@@ -113,7 +113,6 @@ def do_thing(x: int, y: str) -> bool:
 
 ```python
 import logging
-
 logger = logging.getLogger(__name__)
 
 # Use this — never print() in library code
