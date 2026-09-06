@@ -34,11 +34,11 @@ def test_unknown_model_is_rejected():
 
 
 def test_model_that_does_not_declare_the_role_is_rejected():
-    """qwen3.6:27b is analyst/reviewer only — too slow to sit in the developer
-    loop. Pinning it there must fail loudly rather than produce a run nobody can
-    interpret."""
+    """The coders carry no analyst role — that stage reasons about an issue rather
+    than writing code. Pinning one there must fail loudly rather than produce a run
+    nobody can interpret."""
     with pytest.raises(ValueError, match="does not declare"):
-        Pipeline._resolve_overrides({"developer": "qwen3.6:27b"})
+        Pipeline._resolve_overrides({"analyst": "qwen3-coder:30b"})
 
 
 def test_every_qualified_driver_is_pinnable_for_its_roles():
