@@ -176,9 +176,15 @@ class Pipeline:
                 ctx.verification_attempts += 1
                 if ctx.iterations_used >= max_retries:
                     db.update_task(task_id, status="error")
+                    # Create a record of the failure in the KB/logger
+                    logger.error(
+                        f"[pipeline] Empty changes error on #{ctx.issue.number} "
+                        f"after {max_retries} attempts"
+                    )
                     raise EmptyChangesError("Developer produced no changes")
                 logger.warning(
-                    f"[pipeline] No changes produced — iteration {ctx.iterations_used}/{max_retries}"
+                    f"[pipeline] No changes produced — iteration "
+                    f"{ctx.iterations_used}/{max_retries}"
                 )
                 continue
 
