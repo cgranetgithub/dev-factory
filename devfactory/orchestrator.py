@@ -137,6 +137,31 @@ class Pipeline:
 
             git_ops.commit_changes(ctx, attempt=ctx.iterations_used + 1)
 
+            # ── Check for empty diff after developer step ──────────────────────
+            # If the developer produced no changes, we need to retry or fail cleanly
+            if not git_ops.has_changes(ctx):
+                ctx.verification_attempts += 1
+                if ctx.iterations_used >= max_retries:
+                    # Exhausted all retries - fail cleanly with specific error
+                    db.update_task(task_id, status="error")
+                    # Apply the devfactory:error label on the issue
+                    from devfactory.github import client
+
+                    issue = ctx.issue
+                    client.gh.issue(issue.repo_owner, issue.repo_name).add_labels(
+                        "devfactory:error"
+                    )
+                    raise VerificationFailedError(
+                        "Developer produced no changes - the developer agent did not create "
+                        "or modify any files, which would cause a GitHub 422 error if we tried "
+                        f"to push an empty branch. Max retries ({max_retries}) exhausted."
+                    )
+                logger.warning(
+                    f"[pipeline] Developer produced no changes — "
+                    f"iteration {ctx.iterations_used}/{max_retries}"
+                )
+                continue
+
             # ── Gate 1: verification (deterministic) ──────────────────────────
             ctx = self.verification.execute(ctx)
             report = ctx.verification_report

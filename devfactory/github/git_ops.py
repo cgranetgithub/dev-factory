@@ -158,6 +158,27 @@ def get_diff(ctx: PipelineContext) -> str:
         return "[diff unavailable]"
 
 
+def has_changes(ctx: PipelineContext) -> bool:
+    """
+    Check if there are any changes in the current branch compared to the default branch.
+
+    Returns True if there are changes, False otherwise.
+    """
+    workspace = _workspace_path(ctx)
+    try:
+        repo = git.Repo(workspace)
+        default = _default_branch(repo)
+
+        # Get the diff between default branch and current HEAD
+        diff = repo.git.diff(f"{default}...HEAD", "--name-only", "--no-color")
+        # If diff is empty, no changes
+        return bool(diff.strip())
+    except (git.GitCommandError, git.InvalidGitRepositoryError, Exception) as e:
+        logger.warning(f"[git] could not check for changes: {e}")
+        # If we can't check properly due to no repository, assume there are changes to be safe
+        return True
+
+
 def _default_branch(repo: git.Repo) -> str:
     """Detect the default branch name (main or master)."""
     try:
