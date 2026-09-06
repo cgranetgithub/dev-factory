@@ -9,14 +9,10 @@ from devfactory.context import GitHubIssue, PipelineContext
 
 
 def test_parse_review_wellformed_json():
-    """Test that reviewer parses well-formed JSON correctly using the actual _parse_review method."""
+    """Test that reviewer parses well-formed JSON correctly."""
 
-    # Mock a working ReviewerAgent with a dummy model
-    mock_model = mock.MagicMock()
-    mock_model.name = "test-model"
-
-    # Create a reviewer agent with an appropriately mocked model
-    agent = ReviewerAgent(model=mock_model)
+    # Test the logic directly without model instantiation
+    # This avoids the issue with model property requiring execute() to be called
 
     # Valid JSON payload without code block
     valid_json = """
@@ -34,37 +30,148 @@ def test_parse_review_wellformed_json():
 }
 """
 
-    # We need to use the actual method in the module to bypass model requirement
-    # Instead, we'll call _parse_review directly using the internal import
-    # We'll test the behavior directly by examining what the function does with valid inputs
-    pass
+    # Import the module and test the function directly
+    from devfactory.agents.reviewer import ReviewerAgent
+
+    agent = ReviewerAgent(model=mock.MagicMock())
+    # Override the model property to avoid the error
+    agent._model = mock.MagicMock()
+    agent._model.name = "test-model"
+
+    result = agent._parse_review(valid_json)
+
+    assert result.model == "test-model"
+    assert result.verdict == "approved"
+    assert result.summary == "Good code quality"
+    assert result.score == 0.9
+    assert len(result.inline_comments) == 1
+    assert result.inline_comments[0]["path"] == "test.py"
+    assert result.inline_comments[0]["line"] == 10
+    assert result.inline_comments[0]["body"] == "Consider using a more descriptive name"
 
 
 def test_parse_review_json_in_code_block():
     """Test that reviewer extracts JSON from code blocks."""
 
-    mock_model = mock.MagicMock()
-    mock_model.name = "test-model"
-    agent = ReviewerAgent(model=mock_model)
+    # Test the logic directly without model instantiation
 
-    # This one can't be fully tested without mocking model properly
-    pass
+    # Valid JSON payload inside code block
+    json_in_block = """
+```
+{
+    "verdict": "changes_requested",
+    "summary": "Needs fixes",
+    "score": 0.4,
+    "inline_comments": []
+}
+```
+"""
+
+    # Import the module and test the function directly
+    from devfactory.agents.reviewer import ReviewerAgent
+
+    agent = ReviewerAgent(model=mock.MagicMock())
+    # Override the model property to avoid the error
+    agent._model = mock.MagicMock()
+    agent._model.name = "test-model"
+
+    result = agent._parse_review(json_in_block)
+
+    assert result.model == "test-model"
+    assert result.verdict == "changes_requested"
+    assert result.summary == "Needs fixes"
+    assert result.score == 0.4
+    assert len(result.inline_comments) == 0
 
 
 def test_parse_review_unparseable_output():
     """Test that reviewer returns commented verdict with score 0.5 for unparseable output."""
 
-    mock_model = mock.MagicMock()
-    mock_model.name = "test-model"
-    agent = ReviewerAgent(model=mock_model)
+    # Test the logic directly without model instantiation
 
-    # Test the behavior for invalid input
-    pass
+    # Unparseable JSON
+    unparseable = "This is not JSON at all"
+
+    # Import the module and test the function directly
+    from devfactory.agents.reviewer import ReviewerAgent
+
+    agent = ReviewerAgent(model=mock.MagicMock())
+    # Override the model property to avoid the error
+    agent._model = mock.MagicMock()
+    agent._model.name = "test-model"
+
+    result = agent._parse_review(unparseable)
+
+    assert result.model == "test-model"
+    assert result.verdict == "commented"
+    assert result.score == 0.5
+    # Should use first 300 characters of raw input as summary
+    assert result.summary == unparseable[:300]
+
+
+def test_parse_review_malformed_json():
+    """Test that reviewer handles malformed JSON gracefully."""
+
+    # Test the logic directly without model instantiation
+
+    # Malformed JSON (missing closing brace)
+    malformed = """
+{
+    "verdict": "approved",
+    "summary": "Good code quality"
+    "score": 0.9
+"""
+
+    # Import the module and test the function directly
+    from devfactory.agents.reviewer import ReviewerAgent
+
+    agent = ReviewerAgent(model=mock.MagicMock())
+    # Override the model property to avoid the error
+    agent._model = mock.MagicMock()
+    agent._model.name = "test-model"
+
+    result = agent._parse_review(malformed)
+
+    assert result.model == "test-model"
+    assert result.verdict == "commented"
+    assert result.score == 0.5
+
+
+def test_parse_review_missing_fields():
+    """Test that reviewer handles missing fields in JSON gracefully."""
+
+    # Test the logic directly without model instantiation
+
+    # JSON with missing fields
+    missing_fields = """
+{
+    "verdict": "approved"
+}
+"""
+
+    # Import the module and test the function directly
+    from devfactory.agents.reviewer import ReviewerAgent
+
+    agent = ReviewerAgent(model=mock.MagicMock())
+    # Override the model property to avoid the error
+    agent._model = mock.MagicMock()
+    agent._model.name = "test-model"
+
+    result = agent._parse_review(missing_fields)
+
+    assert result.model == "test-model"
+    assert result.verdict == "approved"
+    assert result.summary == ""  # Default empty string
+    assert result.score == 0.5  # Default score
+    assert result.inline_comments == []  # Default empty list
 
 
 def test_build_user_prompt():
     """Test that the user prompt is built correctly."""
-    agent = ReviewerAgent(model=mock.MagicMock())
+
+    mock_model = mock.MagicMock()
+    mock_model.name = "test-model"
+    agent = ReviewerAgent(model=mock_model)
 
     # Create a test context
     issue = GitHubIssue(1, "Test Issue", "Test body", "owner/repo", [], "url")
@@ -93,6 +200,7 @@ def test_build_user_prompt():
 
 def test_reviewer_agent_instantiation():
     """Test that reviewer agent can be instantiated."""
+
     agent = ReviewerAgent(model=mock.MagicMock())
     assert agent is not None
     assert agent.role == "reviewer"
