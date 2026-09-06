@@ -13,7 +13,9 @@ Two backends, selected by ``settings.dev_backend``:
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import re
 import subprocess
 import time
@@ -166,8 +168,7 @@ class DeveloperAgent(BaseAgent):
             raise RuntimeError(f"workspace path not found: {repo_path}")
 
         prompt = self._build_opencode_prompt(ctx)
-        # OpenCode addresses models as "provider/model"; our provider id is "ollama"
-        # (see ~/.config/opencode/opencode.json). self.model is the router's pick.
+        # OpenCode addresses models as "provider/model"; our provider id is "ollama".
         model_ref = f"ollama/{self.model.name}"
 
         cmd = [
@@ -192,6 +193,7 @@ class DeveloperAgent(BaseAgent):
                 capture_output=True,
                 text=True,
                 timeout=settings.opencode_timeout_s,
+                env=self._opencode_env(),
             )
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(
@@ -225,6 +227,35 @@ class DeveloperAgent(BaseAgent):
             completion_tokens=0,
         )
         return ctx
+
+    def _opencode_env(self) -> dict[str, str]:
+        """Environment for the CLI, carrying a provider config built from the registry.
+
+        OpenCode resolves "ollama/<model>" against its own configuration file, which
+        lives outside this project and lists models by hand. Anything the registry
+        declares but that file omits fails at run time with
+        "ProviderModelNotFoundError", after the analyst has already spent its time —
+        which is exactly what happened the first time a newly qualified model was
+        pinned as developer.
+
+        Passing the config inline through OPENCODE_CONFIG_CONTENT makes the registry
+        the single source of truth it claims to be, and removes a hand-maintained
+        file from the critical path.
+        """
+        config = {
+            "$schema": "https://opencode.ai/config.json",
+            "provider": {
+                "ollama": {
+                    "npm": "@ai-sdk/openai-compatible",
+                    "name": "Ollama (local)",
+                    # The OpenAI-compatible endpoint lives under /v1, while
+                    # ollama_base_url points at the server root.
+                    "options": {"baseURL": f"{settings.ollama_base_url.rstrip('/')}/v1"},
+                    "models": {self.model.name: {"name": self.model.name}},
+                }
+            },
+        }
+        return {**os.environ, "OPENCODE_CONFIG_CONTENT": json.dumps(config)}
 
     def _build_opencode_prompt(self, ctx: PipelineContext) -> str:
         """Build the task prompt for OpenCode (no file-block format — it edits itself)."""

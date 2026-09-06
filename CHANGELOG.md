@@ -7,6 +7,12 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+**OpenCode provider config**
+- The developer generates OpenCode's provider config from the registry and passes it via
+  `OPENCODE_CONFIG_CONTENT`, instead of relying on a hand-maintained file outside the
+  project. A model the registry declared but that file omitted failed at run time with
+  `ProviderModelNotFoundError`, after the analyst had already run
+
 **Developer pool**
 - `gemma4:26b` and `glm-4.7-flash` take the `developer` role alongside `qwen3-coder:30b`:
   they qualified as agentic drivers on both trials and are fast enough for a loop that
