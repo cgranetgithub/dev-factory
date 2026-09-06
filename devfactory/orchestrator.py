@@ -33,16 +33,48 @@ class VerificationFailedError(RuntimeError):
 
 
 class Pipeline:
-    def __init__(self) -> None:
+    def __init__(self, model_overrides: dict[str, str] | None = None) -> None:
+        """
+        Args:
+            model_overrides: role → model name, pinning that role for the whole run
+                instead of letting the router draw at random. Comparing two models
+                is impossible while every run rolls the dice, so this is the
+                instrument that turns "it felt better" into a measurement.
+                Unknown role names and unknown model names raise rather than being
+                silently ignored — a comparison run that quietly used a different
+                model than requested is worse than no run.
+        """
         from devfactory.agents.analyst import AnalystAgent
         from devfactory.agents.developer import DeveloperAgent
         from devfactory.agents.reviewer import ReviewerAgent
         from devfactory.agents.verification import VerificationAgent
 
-        self.analyst: AnalystAgent = AnalystAgent()
-        self.developer: DeveloperAgent = DeveloperAgent()
+        forced = self._resolve_overrides(model_overrides or {})
+
+        self.analyst: AnalystAgent = AnalystAgent(forced.get("analyst"))
+        self.developer: DeveloperAgent = DeveloperAgent(forced.get("developer"))
         self.verification: VerificationAgent = VerificationAgent()
-        self.reviewer: ReviewerAgent = ReviewerAgent()
+        self.reviewer: ReviewerAgent = ReviewerAgent(forced.get("reviewer"))
+
+    @staticmethod
+    def _resolve_overrides(overrides: dict[str, str]) -> dict:
+        from devfactory.models.registry import ModelMeta, get_model
+
+        known_roles = {"analyst", "developer", "reviewer"}
+        resolved: dict[str, ModelMeta] = {}
+
+        for role, model_name in overrides.items():
+            if role not in known_roles:
+                raise ValueError(f"Unknown role '{role}' — expected one of {sorted(known_roles)}")
+            model = get_model(model_name)
+            if model is None:
+                raise ValueError(f"Model '{model_name}' is not in the registry")
+            if role not in model.roles:
+                raise ValueError(f"Model '{model_name}' does not declare the '{role}' role")
+            resolved[role] = model
+            logger.info(f"[pipeline] {role} pinned to {model_name}")
+
+        return resolved
 
     def run(self, issue: GitHubIssue) -> PipelineContext:
         ctx = PipelineContext(issue=issue)

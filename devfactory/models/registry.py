@@ -14,16 +14,28 @@ class ModelMeta:
     parameters_b: float  # Billion parameters (approx)
     context_k: int  # Context window in K tokens
     roles: list[str]  # Which agent roles this model can play
-    # Whether the model actually DRIVES the "opencode" agentic loop — i.e. emits
-    # real Edit/Write/run tool calls rather than just describing the change in
-    # prose. This is stricter than Ollama's "tools" capability flag: several
-    # tool-capable models (devstral, qwen2.5) answer conversationally through
-    # Ollama's OpenAI-compatible endpoint and produce zero edits. Only models
-    # verified to drive the loop get True; the opencode developer backend selects
-    # exclusively among them. Irrelevant to plain-chat roles (analyst, reviewer)
-    # and to the single-shot "ollama" developer backend. Verify empirically with a
-    # smoke run (`opencode run --auto ... --print-logs`): the session log must show
-    # `permission=edit` / `touching file`, not a one-step prose reply.
+    # Whether the model actually DRIVES the "opencode" agentic loop — i.e. reads
+    # files, edits them and runs commands, rather than describing the change in
+    # prose. Stricter than Ollama's "tools" capability flag, which some models
+    # advertise while producing zero edits.
+    #
+    # Measured, not assumed. The qualification task: a small project with two
+    # functions and their tests, "add divide(a, b) raising ValueError on zero, add
+    # tests in the existing style, then run pytest and ruff yourself and fix what
+    # they report". Four criteria checked afterwards from outside the model —
+    # function present, tests present, pytest green, ruff clean — over two
+    # identical trials (2026-09-06).
+    #
+    # This flag was WRONG for four models until that measurement. It was first set
+    # from runs made while Ollama still used its 4096-token default context: the
+    # system prompt plus the tool definitions overflowed, Ollama truncated from the
+    # top, the model lost the instructions telling it how to call tools, and
+    # answered in prose. That reads exactly like an incapable model. Anything
+    # measured before OLLAMA_CONTEXT_LENGTH was raised to 32768 should be
+    # re-measured before being believed — opencode's own documentation asks for 64k.
+    #
+    # Re-qualify with scratchpad/qualify_real.sh-style runs, two trials minimum:
+    # one model scored 4/4, then timed out, then 0/4 on the same exercise.
     drives_agentic_loop: bool = False
     notes: str = ""
 
@@ -38,10 +50,12 @@ class ModelMeta:
 #   * 3 models on the "developer"/coding side → this role writes code, where a
 #     model that hallucinates APIs on precise, schema-bound edits is useless.
 #     Only two dedicated coders survive the 20B floor (qwen3-coder, devstral),
-#     so the third slot is filled by a strong DENSE general model. NOTE: for the
-#     "opencode" backend only qwen3-coder actually drives the agentic tool loop
-#     (see drives_agentic_loop) — the other two reply in prose and are used only
-#     as reviewers / by the single-shot "ollama" backend.
+#     so the third slot is filled by a strong DENSE general model. NOTE: neither
+#     of those two can drive the "opencode" agentic loop (see drives_agentic_loop);
+#     they serve as reviewers and as single-shot "ollama"-backend developers.
+#     The agentic drivers are qwen3-coder plus, unexpectedly, all three general
+#     models — so an agentic role can be staffed by a model that is not the
+#     developer's, which is what keeps reviewer and developer separable.
 #   * 3 strong general models → the "analyst" role reasons about the issue and
 #     benefits from broad reasoning rather than pure code fluency.
 # The "reviewer" role draws from ALL six, so the two reviewers can pair a coder
@@ -73,8 +87,9 @@ MODELS: list[ModelMeta] = [
         parameters_b=30,
         context_k=32,
         roles=_CODING_ROLES,
-        # The only local model verified to drive the opencode agentic loop: a smoke
-        # run reaches multiple steps with real `permission=edit` / file writes.
+        # Qualified 4/4 on both trials, and by far the fastest: 20s and 21s where
+        # the others need 40-670s. Speed matters more than it looks — the loop can
+        # run the developer three times per issue, behind two gates.
         drives_agentic_loop=True,
         notes="Qwen3-generation code model (MoE). Newest and strongest Qwen coder.",
     ),
@@ -84,23 +99,24 @@ MODELS: list[ModelMeta] = [
         context_k=32,
         roles=_CODING_ROLES,
         # Mistral's agentic coding model. Despite the branding and Ollama's "tools"
-        # capability, through Ollama's OpenAI-compatible endpoint it replies in
-        # prose and emits NO tool calls (verified: 1 loop step, 0 edits), so it
-        # cannot drive the opencode backend — drives_agentic_loop stays False. Still
-        # a valid reviewer and a valid "ollama"-backend developer.
+        # capability, it replies in prose and emits no tool calls — it explains how
+        # to create the file instead of creating it. The only model here that fails
+        # even the trivial one-file task, re-checked after the context fix, so this
+        # verdict is not the 4096-token artefact that misjudged the others.
         notes="Mistral AI Devstral Small. Tool-capable flag, but prose-only via Ollama.",
     ),
     ModelMeta(
         # Not a dedicated coder: a strong DENSE general model on the coding side.
         # Dense (not MoE) for per-token quality on precise codegen, and a plain
-        # instruct model (no reasoning `<think>` blocks). Like devstral it answers
-        # in prose under opencode (0 edits), so it does not drive the agentic loop —
-        # it remains a reviewer and an "ollama"-backend developer only.
+        # instruct model (no reasoning `<think>` blocks).
+        # Excluded from the agentic loop for INSTABILITY, not incapacity: on the
+        # same exercise it scored 4/4 (269s), then hit the 900s timeout, then 0/4.
+        # A model whose result is a coin toss cannot hold a pipeline role.
         name="qwen2.5:32b",
         parameters_b=32,
         context_k=32,
         roles=_CODING_ROLES,
-        notes="Qwen2.5 32B dense general model. Prose-only via opencode.",
+        notes="Qwen2.5 32B dense general model. Unstable under opencode.",
     ),
     # ── General (analyst + reviewer) ───────────────────────────────────────────
     ModelMeta(
@@ -111,6 +127,11 @@ MODELS: list[ModelMeta] = [
         parameters_b=32,
         context_k=32,
         roles=_GENERAL_ROLES,
+        # Qualified 4/4 on both trials (88s, 42s). Being a general model, it gives
+        # the reviewer role an agentic driver that is NOT the developer's model —
+        # which is what makes an exploring reviewer possible without collapsing the
+        # separation of duties onto a single model.
+        drives_agentic_loop=True,
         notes="Zhipu GLM-4.7 (flash/local variant). Strong general reasoning.",
     ),
     ModelMeta(
@@ -122,6 +143,9 @@ MODELS: list[ModelMeta] = [
         parameters_b=27,
         context_k=32,
         roles=_GENERAL_ROLES,
+        # Qualified 4/4 on both trials, but the slowest that passes: 670s then 153s.
+        # Usable, and a poor default while the budget is three iterations.
+        drives_agentic_loop=True,
         notes="Qwen3.6 27B dense. Latest Qwen general model, safe VRAM margin.",
     ),
     ModelMeta(
@@ -129,6 +153,10 @@ MODELS: list[ModelMeta] = [
         parameters_b=26,
         context_k=32,
         roles=_GENERAL_ROLES,
+        # Qualified 4/4 on both trials (64s, 46s), second fastest overall. Works in
+        # many small steps (25-35 where others take 9) — a different method, same
+        # outcome; step count is not a quality signal.
+        drives_agentic_loop=True,
         notes="Google Gemma 4. Reliable structured output for analyst/reviewer.",
     ),
 ]
