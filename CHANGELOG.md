@@ -7,6 +7,13 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+**Developer pool**
+- `gemma4:26b` and `glm-4.7-flash` take the `developer` role alongside `qwen3-coder:30b`:
+  they qualified as agentic drivers on both trials and are fast enough for a loop that
+  may run three times behind two gates. The role now has three drivers instead of one
+- `qwen3.6:27b` stays out of it on speed alone (670s then 153s), not capability
+- The coding/general split no longer decides who can develop — capability does
+
 **Model qualification — a correction**
 - `drives_agentic_loop` was wrong for four models. Re-measured on a realistic task
   (edit two files, run pytest and ruff, fix what they report), scored from outside the

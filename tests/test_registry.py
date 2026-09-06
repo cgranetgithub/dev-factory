@@ -83,18 +83,45 @@ def test_router_require_agentic_loop_excludes_prose_only_model():
         assert m.name not in selected_names
 
 
-def test_router_reuses_single_driver_when_not_excluding():
-    """A verification retry re-selects the developer without excluding it — the single
-    agentic-loop driver must remain selectable (no starvation)."""
-    drivers = [m for m in get_models_for_role("developer") if m.drives_agentic_loop]
-    if len(drivers) != 1:
-        pytest.skip("Test targets the single-driver opencode pool")
-    only = drivers[0].name
-
+def test_excluding_every_driver_starves_the_pool():
+    """Exclusion still has to be able to empty the pool — that is what made the
+    single-driver configuration fatal, and the router must say so rather than
+    silently returning a model that cannot drive the loop."""
+    drivers = [m.name for m in get_models_for_role("developer") if m.drives_agentic_loop]
     router = ModelRouter(verify_availability=False)
-    # No exclude (developer behaviour): picks the same driver again, no error.
-    assert router.select("developer", require_agentic_loop=True).name == only
 
-    # Excluding it (the old, buggy behaviour) would starve the pool.
     with pytest.raises(RuntimeError, match="No available models"):
-        router.select("developer", exclude=[only], require_agentic_loop=True)
+        router.select("developer", exclude=drivers, require_agentic_loop=True)
+
+
+def test_excluding_one_driver_still_leaves_another():
+    """With redundancy restored, losing one driver is survivable."""
+    drivers = [m.name for m in get_models_for_role("developer") if m.drives_agentic_loop]
+    router = ModelRouter(verify_availability=False)
+
+    picked = router.select("developer", exclude=[drivers[0]], require_agentic_loop=True)
+
+    assert picked.name != drivers[0]
+    assert picked.drives_agentic_loop
+
+
+def test_opencode_developer_pool_has_redundancy():
+    """The agentic developer pool must not depend on a single model.
+
+    It did — one unavailable model took the whole factory offline, which is what
+    issue #23 was about. That fragility came from a measurement error, not from
+    the model landscape.
+    """
+    drivers = [m for m in get_models_for_role("developer") if m.drives_agentic_loop]
+
+    assert len(drivers) >= 2, f"single point of failure: {[m.name for m in drivers]}"
+
+
+def test_a_reviewer_can_always_differ_from_the_developer():
+    """Separation of duties needs at least one agentic driver outside the models
+    that can be the developer — otherwise an exploring reviewer would end up
+    reviewing its own work."""
+    dev_drivers = {m.name for m in get_models_for_role("developer") if m.drives_agentic_loop}
+    rev_drivers = {m.name for m in get_models_for_role("reviewer") if m.drives_agentic_loop}
+
+    assert rev_drivers - dev_drivers or len(dev_drivers) >= 2
