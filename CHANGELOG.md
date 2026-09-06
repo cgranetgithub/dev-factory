@@ -7,6 +7,13 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+**Models**
+- `qwen3.8:27b` replaces `qwen3.6:27b`. Same size on disk and the same 4/4 over two
+  trials, but 42s and 58s against 670s and 153s — which removes the only reason its
+  predecessor was kept out of the `developer` role. The agentic developer pool is now
+  four models. Re-measured rather than inheriting the flag: a version bump is a
+  different model
+
 **Self-provisioning**
 - The pipeline prepares the host before spending anything on a run: it reports the Ollama
   version against a validated minimum (`DEVFACTORY_MIN_OLLAMA_VERSION`, warn — never

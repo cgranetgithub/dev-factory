@@ -142,20 +142,22 @@ MODELS: list[ModelMeta] = [
         notes="Zhipu GLM-4.7 (flash/local variant). Strong general reasoning.",
     ),
     ModelMeta(
-        # Dense 27B rather than the 35b-a3b MoE variant: the MoE weighs ~23 GB on
+        # Dense 27B rather than a 35b-a3b MoE variant: the MoE weighs ~23 GB on
         # disk, leaving barely ~1 GB of the 24 GB card for the KV cache — too tight
         # at 32K context (spill/OOM risk). 27B dense (~17 GB) keeps a comfortable
         # context margin while staying above the 20B floor.
-        name="qwen3.6:27b",
+        name="qwen3.8:27b",
         parameters_b=27,
         context_k=32,
-        roles=_GENERAL_ROLES,
-        # Qualified 4/4 on both trials, but the slowest that passes: 670s then 153s.
-        # Kept OUT of the developer role for that reason alone: three iterations
-        # behind two gates would put a single issue in the half-hour range. Still a
-        # reviewer, where it runs once.
+        # Replaces qwen3.6:27b, which was qualified but the slowest of the pool
+        # (670s then 153s) and therefore kept out of the developer role. Same size
+        # on disk, same 4/4 on both trials, but 42s and 58s — which puts it in the
+        # same band as gemma4 and glm-4.7-flash and removes the only objection to
+        # it developing. Re-measured on the same task rather than inheriting its
+        # predecessor's flag: a version bump is a different model.
+        roles=_GENERAL_AND_DEV_ROLES,
         drives_agentic_loop=True,
-        notes="Qwen3.6 27B dense. Latest Qwen general model, safe VRAM margin.",
+        notes="Qwen3.8 27B dense. Latest Qwen general model, safe VRAM margin.",
     ),
     ModelMeta(
         name="gemma4:26b",
