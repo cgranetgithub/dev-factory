@@ -44,7 +44,45 @@ class DeveloperAgent(BaseAgent):
         # Dispatch on the configured backend. Both mutate files in the workspace
         # repo; the rest of the pipeline (commit → verification → …) is backend-agnostic.
         if settings.dev_backend == "opencode":
-            return self._run_opencode(ctx)
+            try:
+                return self._run_opencode(ctx)
+            except RuntimeError as exc:
+                # If the router could not find a model that drives the agentic loop,
+                # check if we can gracefully fallback to the single-shot "ollama" backend.
+                if (
+                    "No available models for role 'developer'" in str(exc)
+                    and "require_agentic_loop=True" in str(exc)
+                    and settings.allow_backend_fallback
+                ):
+                    logger.warning(
+                        "[developer] No agentic-loop driver available; falling back "
+                        "to single-shot 'ollama' backend. (Reason: 'drives_agentic_loop' "
+                        "capability missing)"
+                    )
+                    ctx.backend_fallback = True
+                    ctx.backend_fallback_reason = "missing drives_agentic_loop model"
+
+                    # Perform the fallback by switching the backend for this run.
+                    # We use the "ollama" backend path.
+                    # Note: We must ensure the context is updated to reflect the fallback
+                    # so that the KB entry includes the 'degraded' marker.
+                    ctx.log_execution(
+                        agent=self.role,
+                        model="fallback-ollama",
+                        duration_ms=0,
+                        prompt_tokens=0,
+                        completion_tokens=0,
+                        metadata={"degraded_backend": True, "reason": ctx.backend_fallback_reason},
+                    )
+                    return self._run_ollama(ctx)
+
+                # If fallback is not allowed or not the specific error, re-raise a cleaner error.
+                if not settings.allow_backend_fallback:
+                    raise RuntimeError(
+                        "Backend fallback refused. No model with 'drives_agent_loop' "
+                        "available for 'opencode' backend. (Target model: qwen3-coder:30b)"
+                    ) from None
+                raise
         return self._run_ollama(ctx)
 
     # ── "ollama" backend — single-shot, full-file rewrite ──────────────────────

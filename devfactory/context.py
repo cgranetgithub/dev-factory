@@ -72,7 +72,7 @@ class PipelineContext:
 
     # Tracking
     verification_attempts: int = 0
-    # Times the reviewer sent the change back to the developer. Counted separately
+    # Times the reviewer sent the change back to the developer. Countromted separately
     # from verification failures — they are different gates and the distinction
     # matters in the record — but they share one budget of developer iterations.
     review_rejections: int = 0
@@ -87,6 +87,10 @@ class PipelineContext:
     lint_left_behind: list[int | None] = field(default_factory=list)
     model_assignments: dict[str, str] = field(default_factory=dict)
     # {"analyst": "qwen2.5-coder:14b", "developer": "deepseek-coder-v2:16b", ...}
+
+    # Fallback tracking
+    backend_fallback: bool = False
+    backend_fallback_reason: str | None = None
 
     # Execution log (for KB scoring)
     execution_log: list[dict[str, Any]] = field(default_factory=list)

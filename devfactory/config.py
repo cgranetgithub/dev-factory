@@ -93,6 +93,9 @@ class Settings(BaseSettings):
     # Docker
     docker_test_image: str = Field(default="devfactory-test:latest", alias="DOCKER_TEST_IMAGE")
 
+    # Fallback
+    allow_backend_fallback: bool = Field(default=True, alias="DEVFACTORY_ALLOW_BACKEND_FALLBACK")
+
 
 # Singleton — import this everywhere
 settings = Settings()
