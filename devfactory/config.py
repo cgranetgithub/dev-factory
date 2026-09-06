@@ -60,6 +60,16 @@ class Settings(BaseSettings):
     # Ollama
     ollama_base_url: str = "http://localhost:11434"
     ollama_timeout_s: int = Field(default=300, alias="OLLAMA_TIMEOUT_S")
+    # Oldest Ollama release this project has actually been validated against.
+    # Below it we warn rather than refuse: it may work, we simply have not checked,
+    # and older releases behaved differently around tool calling and context length
+    # — the kind of difference that shows up as "the model answered in prose"
+    # rather than as an error.
+    min_ollama_version: str = Field(default="0.33.0", alias="DEVFACTORY_MIN_OLLAMA_VERSION")
+    # Pull registry models that Ollama does not have yet, at the start of a run.
+    # The factory should provision what it declares instead of failing on a missing
+    # model halfway through a pipeline. Turn off on a metered or offline host.
+    auto_pull_models: bool = Field(default=True, alias="DEVFACTORY_AUTO_PULL_MODELS")
 
     # DevFactory
     poll_interval: int = Field(default=60, alias="DEVFACTORY_POLL_INTERVAL")

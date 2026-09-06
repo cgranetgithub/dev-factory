@@ -7,6 +7,15 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+**Self-provisioning**
+- The pipeline prepares the host before spending anything on a run: it reports the Ollama
+  version against a validated minimum (`DEVFACTORY_MIN_OLLAMA_VERSION`, warn — never
+  block), and pulls any registry model Ollama is missing
+  (`DEVFACTORY_AUTO_PULL_MODELS`, on by default). Previously the router silently skipped
+  missing models, so a registry of six could quietly behave like a registry of one
+- `devfactory init` provisions models too, which is the right moment for a multi-GB
+  download
+
 **OpenCode provider config**
 - The developer generates OpenCode's provider config from the registry and passes it via
   `OPENCODE_CONFIG_CONTENT`, instead of relying on a hand-maintained file outside the

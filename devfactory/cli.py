@@ -222,15 +222,25 @@ def _run_init(repo: str):
     else:
         console.print(f"   [red]✗ Docker build failed:[/]\n{result.stderr[-500:]}")
 
-    # 3. Ollama check
+    # 3. Ollama check + provisioning
     console.print("\n[bold]3. Checking Ollama...[/]")
     try:
         from devfactory.models.client import ollama
+        from devfactory.models.provisioning import check_ollama_version, ensure_models_available
 
-        available = ollama.list_models()
-        console.print(f"   [green]✓ Ollama running — {len(available)} model(s) available[/]")
-        if not available:
-            console.print("   [yellow]  No models pulled yet. Run: devfactory models --sync[/]")
+        version = ollama.version()
+        ok = check_ollama_version()
+        marker = "[green]✓[/]" if ok else "[yellow]⚠[/]"
+        console.print(f"   {marker} Ollama {version}")
+
+        # Pull whatever the registry declares but Ollama lacks. Setup is the right
+        # moment for a multi-GB download — not the middle of a pipeline run.
+        console.print("   Provisioning registered models (this can take a while)…")
+        pulled = ensure_models_available()
+        if pulled:
+            console.print(f"   [green]✓ Pulled {len(pulled)} model(s): {', '.join(pulled)}[/]")
+        else:
+            console.print("   [green]✓ All registered models available[/]")
     except Exception as e:
         console.print(f"   [red]✗ Ollama not reachable: {e}[/]")
 
