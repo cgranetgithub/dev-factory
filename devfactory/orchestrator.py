@@ -163,7 +163,7 @@ class Pipeline:
                     )
                 logger.warning(
                     f"[pipeline] Developer produced no changes — "
-                    f"iteration {ctx.iterations_used}/{max_retries}"
+                    f"iteration {ctx.iterations_used + 1}/{max_retries}"
                 )
                 continue
 

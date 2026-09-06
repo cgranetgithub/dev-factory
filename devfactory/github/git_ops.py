@@ -84,11 +84,11 @@ def commit_changes(ctx: PipelineContext, attempt: int = 1) -> str:
     repo.git.add("-A")
 
     # Check if there is anything to commit
-    has_staged = bool(repo.index.diff("HEAD")) if repo.head.is_valid() else bool(repo.index.entries)
+    has_staged = bool(repo.index.diff("HEAD")) if repo.head.is_valid else bool(repo.index.entries)
     has_untracked = bool(repo.untracked_files)
     if not has_staged and not has_untracked:
         logger.warning("[git] nothing to commit — developer produced no file changes")
-        if repo.head.is_valid():
+        if repo.head.is_valid:
             return str(repo.head.commit.hexsha)
         return ""
 
