@@ -7,6 +7,22 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+**Model qualification — a correction**
+- `drives_agentic_loop` was wrong for four models. Re-measured on a realistic task
+  (edit two files, run pytest and ruff, fix what they report), scored from outside the
+  model on four criteria, over two identical trials: `gemma4:26b`, `glm-4.7-flash` and
+  `qwen3.6:27b` all drive the loop, alongside `qwen3-coder:30b`
+- The original verdict was taken while Ollama still used its 4096-token default context,
+  where the tool definitions overflow and the model answers in prose — indistinguishable
+  from incapacity. The registry comment now records this so the next reader re-measures
+  rather than trusting the flag
+- `qwen2.5:32b` stays excluded, for instability rather than incapacity: 4/4, then a
+  timeout, then 0/4 on the same exercise. `devstral:24b` stays excluded — it fails even
+  the trivial task after the context fix
+- New `--model role=name` on `devfactory run`, repeatable, so a comparison run pins its
+  models instead of drawing them at random. Unknown roles, unknown models and
+  role/model mismatches are rejected rather than silently ignored
+
 **Verification environment**
 - `docker/Dockerfile.test` installs `git` and configures an identity. GitPython raises
   on import without the binary, so any test module importing it failed to *collect* —

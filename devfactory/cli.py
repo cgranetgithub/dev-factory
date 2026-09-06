@@ -13,11 +13,23 @@ app = typer.Typer(name="devfactory", help="Local AI software factory")
 console = Console()
 
 
+# Declared here rather than inline: ruff B008 forbids a call in an argument default.
+_MODEL_OPTION = typer.Option(
+    [],
+    "--model",
+    "-m",
+    help="Pin a role to a model, as role=name (e.g. -m developer=gemma4:26b). "
+    "Repeatable. Without it each role is drawn at random, which makes two runs "
+    "incomparable.",
+)
+
+
 @app.command()
 def run(
     issue: int = typer.Option(..., "--issue", "-i", help="GitHub issue number"),
     repo: str = typer.Option(..., "--repo", "-r", help="GitHub repo (owner/repo)"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
+    model: list[str] = _MODEL_OPTION,
 ):
     """Process a single GitHub issue through the full pipeline."""
     from devfactory.logging_setup import setup_logging
@@ -27,10 +39,22 @@ def run(
     from devfactory.github.issues import fetch_issue
     from devfactory.orchestrator import Pipeline
 
+    overrides = {}
+    for pair in model:
+        if "=" not in pair:
+            console.print(f"[bold red]✗[/] --model expects role=name, got '{pair}'")
+            raise typer.Exit(code=2)
+        role, name = pair.split("=", 1)
+        overrides[role.strip()] = name.strip()
+
     console.print(f"[bold blue]DevFactory[/] processing issue #{issue} on {repo}")
 
     gh_issue = fetch_issue(repo, issue)
-    pipeline = Pipeline()
+    try:
+        pipeline = Pipeline(model_overrides=overrides)
+    except ValueError as e:
+        console.print(f"[bold red]✗[/] {e}")
+        raise typer.Exit(code=2) from e
     ctx = pipeline.run(gh_issue)
 
     if ctx.pr_url:
