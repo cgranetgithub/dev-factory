@@ -27,9 +27,13 @@ logger = logging.getLogger(__name__)
 class VerificationFailedError(RuntimeError):
     """Raised when the Dev↔Verification loop has exhausted all its attempts.
 
-    Distinct from a generic error: the poller catches it specifically to apply
+    Distinct from a generic error: the pollu catches it specifically to apply
     the ``devfactory:verification-failed`` label instead of ``devfactory:error``.
     """
+
+
+class EmptyChangesError(RuntimeError):
+    """Raised when the developer agent produced no changes even after retries."""
 
 
 class Pipeline:
@@ -167,13 +171,23 @@ class Pipeline:
         while True:
             ctx = self.developer.execute(ctx)
 
+            # ── Check for empty changes ────────────────────────────────────────
+            if not git_ops.has_changes(ctx):
+                ctx.verification_attempts += 1
+                if ctx.iterations_used >= max_retries:
+                    db.update_task(task_id, status="error")
+                    raise EmptyChangesError("Developer produced no changes")
+                logger.warning(
+                    f"[pipeline] No changes produced — iteration {ctx.iterations_used}/{max_retries}"
+                )
+                continue
+
             # Clear the mechanical lint failures before the gate sees them, so the
             # retry budget is spent on real defects rather than on line length. The
             # return value is what the developer left behind, kept for scoring.
             ctx.lint_left_behind.append(
                 autofix(_workspace_path(ctx), git_ops.changed_python_files(ctx))
             )
-
             git_ops.commit_changes(ctx, attempt=ctx.iterations_used + 1)
 
             # ── Gate 1: verification (deterministic) ──────────────────────────

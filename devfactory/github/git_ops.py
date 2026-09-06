@@ -158,6 +158,18 @@ def get_diff(ctx: PipelineContext) -> str:
         return "[diff unavailable]"
 
 
+def has_changes(ctx: PipelineContext) -> bool:
+    """
+    Check if there are any changes in the current branch compared to the default branch.
+    """
+    workspace = _workspace_path(ctx)
+    repo = git.Repo(workspace)
+    default = _default_branch(repo)
+
+    # Check if there are any differences between the default branch and current HEAD
+    return bool(repo.index.diff(default)) or bool(repo.untracked_files)
+
+
 def _default_branch(repo: git.Repo) -> str:
     """Detect the default branch name (main or master)."""
     try:
