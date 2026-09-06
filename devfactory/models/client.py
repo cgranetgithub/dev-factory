@@ -89,6 +89,13 @@ class OllamaClient:
             duration_ms=elapsed_ms,
         )
 
+    def version(self) -> str:
+        """Return the running Ollama server version (e.g. "0.33.3")."""
+        with httpx.Client(timeout=10) as client:
+            resp = client.get(f"{self.base_url}/api/version")
+            resp.raise_for_status()
+        return str(resp.json().get("version", ""))
+
     def list_models(self) -> list[str]:
         """Return names of models currently available in Ollama."""
         with httpx.Client(timeout=30) as client:

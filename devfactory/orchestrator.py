@@ -83,6 +83,13 @@ class Pipeline:
 
         logger.info(f"[pipeline] start issue=#{issue.number} '{issue.title}' repo={issue.repo}")
 
+        # Before anything is spent: make the host ready, or say what is wrong with
+        # it. A missing model discovered at the developer step has already cost the
+        # analyst its run.
+        from devfactory.models.provisioning import prepare_host
+
+        prepare_host()
+
         try:
             # ── 1. Analyst ────────────────────────────────────────────────────
             ctx = self.analyst.execute(ctx)
