@@ -1,6 +1,17 @@
 FROM python:3.11-slim
 
-# Install QA tools
+# The git binary is not optional. GitPython — a runtime dependency of this project,
+# and a common one in general — raises on import when it cannot find `git`, so a
+# test module that imports it fails to *collect*, and pytest reports
+# "0 passed, 0 failed" plus a collection error. The verification gate then fails
+# every run of the repository regardless of what the developer produced.
+# python:3.11-slim ships without it; GitHub Actions runners have it, which is how
+# the divergence stayed invisible until it blocked four factory runs.
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install verification tools
 RUN pip install --no-cache-dir \
     ruff>=0.4.0 \
     mypy>=1.10.0 \
@@ -12,6 +23,13 @@ RUN pip install --no-cache-dir \
 # The project is mounted at /workspace
 
 WORKDIR /workspace
+
+# GitPython also wants an identity before it will create a commit; a container has
+# none, and a test that commits would fail with an unhelpful error.
+RUN git config --global user.email "verification@devfactory.local" \
+    && git config --global user.name "DevFactory Verification" \
+    && git config --global init.defaultBranch main \
+    && git config --global --add safe.directory '*'
 
 # Install project dependencies if pyproject.toml or requirements.txt exists
 # This runs at container start, not at image build time

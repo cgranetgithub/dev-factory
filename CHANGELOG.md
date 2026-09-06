@@ -7,6 +7,15 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+**Verification environment**
+- `docker/Dockerfile.test` installs `git` and configures an identity. GitPython raises
+  on import without the binary, so any test module importing it failed to *collect* —
+  reported as `0 passed, 0 failed` plus a collection error — and the gate then failed
+  every run of this repository regardless of what the developer produced
+- New `verification-image` CI job builds that image and runs the suite inside it. The
+  GitHub runner has git and the slim image does not, which is how the divergence stayed
+  invisible while CI was green
+
 **Review becomes a gate**
 - The reviewer moves inside the developer loop and its verdict is now acted on:
   `changes_requested` sends the change back to the developer with the review comments,
