@@ -331,18 +331,16 @@ DevFactory manages these labels automatically:
 Edit `devfactory/models/registry.py` and add a `ModelMeta` entry:
 
 ```python
-(
-    ModelMeta(
-        name="devstral:24b",
-        parameters_b=24,
-        context_k=32,
-        roles=["developer", "reviewer"],
-        # Set to True only after verifying the model actually emits tool calls in
-        # OpenCode — Ollama's "tools" capability flag is not enough.
-        drives_agentic_loop=False,
-        notes="Mistral's agentic coder",
-    ),
-)
+ModelMeta(
+    name="devstral:24b",
+    parameters_b=24,
+    context_k=32,
+    roles=["developer", "reviewer"],
+    # Set to True only after verifying the model actually emits tool calls in
+    # OpenCode — Ollama's "tools" capability flag is not enough.
+    drives_agentic_loop=False,
+    notes="Mistral's agentic coder",
+),
 ```
 
 Then pull the model in Ollama:

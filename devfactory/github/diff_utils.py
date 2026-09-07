@@ -28,10 +28,19 @@ def truncate_diff(diff: str, max_chars: int) -> str:
 
     result_lines = []
     total_length = 0
+    omitted_files: list[str] = []
+
+    # Keep the preamble. `get_diff` asks git for `--stat -p`, so a diff opens with
+    # the summary of every file it touches — which is precisely the overview a
+    # reviewer needs once the body has been cut. Dropping it would remove the part
+    # that says what is no longer shown.
+    preamble = sections[0]
+    if preamble:
+        result_lines.append(preamble.rstrip("\n"))
+        total_length += len(preamble)
 
     # Process file sections until we can't fit another one
     i = 1  # Start from index 1 since index 0 is preamble or empty
-    omitted_files = []
 
     while i < len(sections):
         section = "diff --git " + sections[i]
@@ -39,22 +48,22 @@ def truncate_diff(diff: str, max_chars: int) -> str:
 
         # Check if we can add this entire section without exceeding limit
         if total_length + section_len <= max_chars:
-            result_lines.append(section)
+            result_lines.append(section.rstrip("\n"))
             total_length += section_len
             i += 1
         else:
-            # Cannot include complete file - check edge case first
-            if len(result_lines) == 0:
-                # No files included yet, so truncate the next section
-                truncated_section = section[:max_chars]
-                result_lines.append(truncated_section)
-                omitted_files.append(_extract_filename(section))
-            else:
-                # Include the remaining sections as omitted
-                for j in range(i, len(sections)):
-                    if sections[j]:  # Only if there's content
-                        omitted_files.append(_extract_filename("diff --git " + sections[j]))
+            # Cannot include this file whole.
+            if not any(line.startswith("diff --git ") for line in result_lines):
+                # Nothing but the preamble so far: show what fits of this file
+                # rather than nothing at all. It is partially present, so it is
+                # NOT reported as omitted — only the files after it are.
+                remaining = max(0, max_chars - total_length)
+                result_lines.append(section[:remaining].rstrip("\n"))
+                i += 1
 
+            for j in range(i, len(sections)):
+                if sections[j]:
+                    omitted_files.append(_extract_filename("diff --git " + sections[j]))
             break
 
     # Add footer for omitted files if any
@@ -63,7 +72,7 @@ def truncate_diff(diff: str, max_chars: int) -> str:
         footer = f"[... {omitted_count} more file(s) omitted: {', '.join(omitted_files)}]"
         result_lines.append(footer)
 
-    return "\n".join(result_lines)
+    return "\n\n".join(result_lines)
 
 
 def _extract_filename(diff_section: str) -> str:
@@ -82,5 +91,5 @@ def _extract_filename(diff_section: str) -> str:
             # Extract file names - format is like: diff --git a/file.txt b/file.txt
             parts = line.split()
             if len(parts) >= 3:
-                return parts[2][2:]  # Remove leading 'b/' prefix
+                return parts[2][2:]  # strip the leading 'a/'
     return "unknown"

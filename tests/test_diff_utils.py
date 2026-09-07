@@ -50,10 +50,10 @@ index 1234567..7654321 100644
     result = truncate_diff(diff, 150)
     assert "diff --git a/file1.py b/file1.py" in result
     assert "diff --git a/file2.py b/file2.py" not in result
-    # Because file2 would also go over the limit, we just show the truncated first file
-    # and say there are 2 more omitted (i.e., all except the first).
-    # The exact count depends on how many would have fit.
-    assert "[... 1 more file(s) omitted:" in result  # At least one should be omitted
+    # file1 is shown, truncated, so it is not omitted — file2 and file3 are. The
+    # original assertion said 1, which only held because a partially included file
+    # was also counted as omitted; the comment above it already said 2.
+    assert "[... 2 more file(s) omitted:" in result
 
 
 def test_truncate_diff_single_file_exceeds_limit():
@@ -87,3 +87,42 @@ that has multiple lines
 and no git markers"""
     result = truncate_diff(diff, 100)
     assert result == diff
+
+
+def _section(name: str, lines: int) -> str:
+    body = "+x\n" * lines
+    return f"diff --git a/{name} b/{name}\n--- a/{name}\n+++ b/{name}\n{body}"
+
+
+_STAT = " devfactory/a.py | 2 +-\n devfactory/b.py | 3 +++\n 2 files changed\n\n"
+
+
+def test_the_stat_summary_survives_truncation():
+    """`get_diff` asks git for `--stat -p`, so the diff opens with a summary of
+    every file it touches. That summary is exactly what a reviewer needs once the
+    body has been cut — dropping it removes the part that says what is missing."""
+    diff = _STAT + _section("a.py", 200) + _section("b.py", 200)
+
+    result = truncate_diff(diff, 900)
+
+    assert "2 files changed" in result
+    assert "devfactory/b.py |" in result
+
+
+def test_a_partially_included_file_is_not_reported_as_omitted():
+    """One oversized file: it is truncated and shown. Listing it as omitted as
+    well would contradict the diff the reader is looking at."""
+    diff = _section("big.py", 500)
+
+    result = truncate_diff(diff, 300)
+
+    assert "big.py" in result
+    assert "omitted" not in result
+
+
+def test_files_after_a_partially_included_one_are_still_reported():
+    diff = _section("big.py", 500) + _section("next.py", 10)
+
+    result = truncate_diff(diff, 300)
+
+    assert "1 more file(s) omitted: next.py" in result
