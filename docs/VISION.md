@@ -63,8 +63,10 @@ already fall out of its shape. The gap is evidence and formalisation, not a new 
 
 | Control area | What exists today | Status | What to add |
 |---|---|---|---|
-| Staged, controlled process | Analyst → Developer → Verification → Reviewer ×2 → PR | Partial | Explicit phase gates with a defined exit condition and a stored artifact per stage |
-| Audit trail | KB (SQLite) logs each execution: model, duration, tokens, verdicts | Partial | Append-only, hash-chained records: prompt + output + verdict + timestamp + git SHA |
+| Staged, controlled process | Analyst → Developer → three gates (scope, verification, review) → PR | **Have** | Store an artifact per stage, not only the verdict |
+| Enforced phase gates | Each gate can send the change back; a shared iteration budget bounds the loop; a gate that is never satisfied opens the PR flagged rather than silently | **Have** | Make the gate outcomes part of the exported evidence |
+| Audit trail | KB (SQLite) logs each execution: model, duration, tokens, verdicts, and per-iteration counters for each gate | Partial | Append-only, hash-chained records: prompt + output + verdict + timestamp + git SHA |
+| Reproducible runs | `--model role=name` pins a role, so a run can be repeated with the same models instead of a random draw | **Have** | Record the pinning in the run's evidence, not only in the command line |
 | Change management | Branch + PR + CODEOWNERS, protected `main`, human merge | Have | Link each change back to its issue and approval record |
 | Separation of duties | The reviewer cannot approve its own PR (GitHub returns 422) | Have | Document it as a control; keep an independent, competent human approver |
 | Human sign-off | The repository owner is the sole merger — the accountable authority | Partial | Capture who approved what, when, against which criteria |
@@ -75,6 +77,26 @@ already fall out of its shape. The gap is evidence and formalisation, not a new 
 The reviewer 422 deserves a note: an agent posting as the PR author cannot formally
 approve that PR. That is not a bug to work around — it is a *separation-of-duties
 control*. It should be documented and preserved.
+
+### What the gates have actually caught
+
+Not a projection — these are runs from 2026-09-06/07, and they are the argument for
+the gates being controls rather than decoration:
+
+- Two pull requests reached a human containing **a feature that is never called**: a
+  fallback wrapped around an exception that cannot reach it, and a helper module wired
+  into nothing. Lint, types and tests all passed them, and the reviewer approved one of
+  them. The **scope gate** — does the change touch the files the task declared? — now
+  refuses both before the container or the model is spent.
+- A change that **passed every gate** was rejected on human review for a regression no
+  tool could see: `repo.head.is_valid()` rewritten as `repo.head.is_valid`, a bound
+  method that is always truthy. This is the standing argument for keeping a competent
+  human as the accountable authority, and for the reviewer being able to read the code
+  around a change rather than only its diff.
+- A model was **wrongly excluded from the registry for months** because a verdict was
+  recorded from runs made under a since-changed configuration. The lesson is written
+  into the registry itself: a capability flag carries the measurement that justifies it,
+  and anything measured before the configuration changed is re-measured.
 
 ---
 
@@ -207,7 +229,9 @@ Run the existing factory as a controlled, evidenced system.
 
 - Access control and secrets review; documented local-only data-residency posture
 - Formalise change management (already: branch → PR → CODEOWNERS → protected `main`)
-- Audit-grade run logs: every agent action captured immutably
+- Audit-grade run logs: every agent action captured immutably (partly there — every gate
+  outcome and per-iteration counter is logged and scored; the records are not yet
+  append-only or hash-chained)
 - **Control monitoring** — `devfactory controls check`: snapshot the enforced GitHub
   configuration, compare it to a versioned expected policy, archive every check, alert on
   drift, run it per pipeline run *and* on a schedule
