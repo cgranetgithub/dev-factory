@@ -7,6 +7,14 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+**Run autonomy**
+- The pipeline applies the issue's status labels itself, whatever the outcome. They lived
+  in the poller, so a run started from the CLI left the issue labelled `ready-for-dev` and
+  the poller would pick it up again. A GitHub failure there is logged, never fatal
+- Factory pull requests arm auto-merge (squash) on creation, so GitHub merges once the
+  approval requirement is met. Approved factory PRs were sitting unmerged because nobody
+  had armed them — the opposite of autonomous. The human approval stays the gate
+
 **Analyst**
 - An unparseable analyst response no longer degrades into an empty `TaskSpec` that the
   pipeline runs on anyway. The analyst is asked again, with the problem named, up to

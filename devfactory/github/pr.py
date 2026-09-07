@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 
 import git
+from github import GithubException
 
 from devfactory.context import PipelineContext
 from devfactory.github.client import gh
@@ -56,8 +57,29 @@ def create_or_update_pr(ctx: PipelineContext) -> tuple[str, int]:
         # Link to issue via label
         pr.add_to_labels(PR_LABEL)
         logger.info(f"[pr] created PR #{pr.number}: {pr.html_url}")
+        _arm_auto_merge(pr)
 
     return pr.html_url, pr.number
+
+
+def _arm_auto_merge(pr) -> None:
+    """Ask GitHub to squash-merge the PR once its approval requirement is met.
+
+    The human approval stays the gate — this only removes the second manual step
+    after it. Factory pull requests were sitting approved and unmerged because
+    nobody had armed them, which is the opposite of autonomous.
+
+    Best effort: auto-merge may be disabled on the repository, or the ruleset may
+    make the PR ineligible. Neither is worth failing a run that has already
+    produced its work, so the failure is logged and the PR is left for a manual
+    merge.
+    """
+    try:
+        pr.enable_automerge(merge_method="SQUASH")
+    except GithubException as e:
+        logger.warning(f"[pr] could not arm auto-merge on #{pr.number} ({e}) — merge manually")
+    else:
+        logger.info(f"[pr] auto-merge armed on #{pr.number} (squash, after approval)")
 
 
 def _build_pr_body(ctx: PipelineContext) -> str:
