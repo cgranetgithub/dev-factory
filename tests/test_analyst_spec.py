@@ -90,3 +90,40 @@ def test_a_run_stops_rather_than_proceeding_on_an_empty_plan(monkeypatch):
 
     with pytest.raises(AnalystFailedError, match="could not produce a usable TaskSpec"):
         agent.run(_ctx())
+
+
+def test_a_cut_off_answer_is_reported_as_cut_off(monkeypatch):
+    """Telling a model its JSON was unusable, when its JSON was simply never
+    written, sends it to fix the one thing that was not broken."""
+    agent = AnalystAgent()
+    monkeypatch.setattr(agent, "load_prompt", lambda *a, **k: "system")
+
+    sent: list = []
+    replies = iter(
+        [
+            LLMResponse(
+                content="",
+                model="m",
+                prompt_tokens=0,
+                completion_tokens=4096,
+                duration_ms=1,
+                truncated=True,
+                thinking_tokens_only=True,
+            ),
+            LLMResponse(
+                content=_GOOD, model="m", prompt_tokens=0, completion_tokens=10, duration_ms=1
+            ),
+        ]
+    )
+
+    def fake_chat(ctx, messages, **kwargs):
+        sent.append(messages)
+        return next(replies)
+
+    monkeypatch.setattr(agent, "chat", fake_chat)
+
+    agent.run(_ctx())
+
+    correction = sent[1][-1]["content"]
+    assert "cut off" in correction
+    assert "do not think it through first" in correction
