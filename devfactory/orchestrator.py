@@ -17,7 +17,10 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
+from github import GithubException
+
 from devfactory.context import GitHubIssue, PipelineContext
+from devfactory.github import issues
 from devfactory.kb.database import db
 from devfactory.kb.scorer import scorer
 
@@ -83,6 +86,12 @@ class Pipeline:
 
         logger.info(f"[pipeline] start issue=#{issue.number} '{issue.title}' repo={issue.repo}")
 
+        # The pipeline owns the issue's status labels. They used to live in the
+        # poller, so a run started from the CLI left the issue labelled
+        # ready-for-dev — and the poller would pick it up again. One owner, one
+        # behaviour, whatever started the run.
+        self._mark(issues.mark_in_progress, issue.repo, issue.number)
+
         # Before anything is spent: make the host ready, or say what is wrong with
         # it. A missing model discovered at the developer step has already cost the
         # analyst its run.
@@ -120,22 +129,39 @@ class Pipeline:
                 completed_at=datetime.now(UTC).replace(tzinfo=None).isoformat(),
             )
             logger.info(f"[pipeline] done — PR: {ctx.pr_url}")
+            if ctx.pr_url:
+                self._mark(issues.mark_ready_for_review, issue.repo, issue.number, ctx.pr_url)
 
-        except VerificationFailedError:
+        except VerificationFailedError as e:
             # The "verification_failed" status was already set inside the Dev↔Verification loop;
             # do not overwrite it with "error". The poller applies the right label.
             logger.warning(f"[pipeline] Verification failed on #{issue.number} (retries exhausted)")
+            self._mark(issues.mark_qa_failed, issue.repo, issue.number, str(e))
             raise
 
         except Exception as e:
             db.update_task(task_id, status="error")
             logger.error(f"[pipeline] failed on #{issue.number}: {e}", exc_info=True)
+            self._mark(issues.mark_error, issue.repo, issue.number, str(e))
             raise
 
         finally:
             scorer.flush(ctx, task_id)
 
         return ctx
+
+    @staticmethod
+    def _mark(fn, *args) -> None:
+        """Apply a status label, and never let GitHub being unreachable end a run.
+
+        The labels are how a human sees where an issue stands, but they are not the
+        work. Losing one is worth a warning; losing the run that produced a pull
+        request because a label call timed out is not.
+        """
+        try:
+            fn(*args)
+        except (GithubException, OSError) as e:
+            logger.warning(f"[pipeline] could not update the issue's labels ({e})")
 
     # ── Steps ────────────────────────────────────────────────────────────────
 

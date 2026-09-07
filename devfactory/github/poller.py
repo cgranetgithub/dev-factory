@@ -13,10 +13,6 @@ from rich.console import Console
 from devfactory.config import settings
 from devfactory.github.issues import (
     fetch_ready_issues,
-    mark_error,
-    mark_in_progress,
-    mark_qa_failed,
-    mark_ready_for_review,
 )
 from devfactory.kb.database import db
 
@@ -62,26 +58,21 @@ class Poller:
 
         console.print(f"\n[bold green]→ Processing issue #{issue.number}:[/] {issue.title}")
 
-        # Mark on GitHub immediately to prevent double-pickup
-        mark_in_progress(self.repo, issue.number)
-
         from devfactory.orchestrator import Pipeline, VerificationFailedError
 
         pipeline = Pipeline()
 
         try:
+            # The pipeline applies the status labels itself, whatever the outcome,
+            # so a run started from the CLI behaves exactly like one started here.
             ctx = pipeline.run(issue)
             if ctx.pr_url:
-                mark_ready_for_review(self.repo, issue.number, ctx.pr_url)
                 console.print(f"[bold green]✓ PR ready:[/] {ctx.pr_url}")
             else:
                 logger.warning(f"[poller] pipeline done for #{issue.number} but no PR URL")
         except VerificationFailedError as e:
-            # Code produced but verification never passed after all retries → dedicated label
-            mark_qa_failed(self.repo, issue.number, str(e))
             console.print(f"[bold yellow]✗ Verification failed on #{issue.number}:[/] {e}")
         except Exception as e:
-            mark_error(self.repo, issue.number, str(e))
             console.print(f"[bold red]✗ Error on #{issue.number}:[/] {e}")
 
     def _is_already_tracked(self, issue_number: int) -> bool:
