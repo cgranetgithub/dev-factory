@@ -159,7 +159,7 @@ class Pipeline:
         """
         from devfactory.config import settings
         from devfactory.github import git_ops
-        from devfactory.github.git_ops import _workspace_path
+        from devfactory.github.git_ops import workspace_path
         from devfactory.verification.autofix import autofix
         from devfactory.verification.scope import check_scope
 
@@ -172,7 +172,7 @@ class Pipeline:
             # retry budget is spent on real defects rather than on line length. The
             # return value is what the developer left behind, kept for scoring.
             ctx.lint_left_behind.append(
-                autofix(_workspace_path(ctx), git_ops.changed_python_files(ctx))
+                autofix(workspace_path(ctx), git_ops.changed_python_files(ctx))
             )
 
             git_ops.commit_changes(ctx, attempt=ctx.iterations_used + 1)

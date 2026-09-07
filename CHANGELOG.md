@@ -7,6 +7,15 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+**Coherence**
+- `devfactory models --sync` now delegates to the same `ensure_models_available()` the
+  pipeline calls. There were two implementations of "pull what the registry declares";
+  the one that drifted would have been the one nobody ran that day
+- Removed the `_score_entry` branch that documented its own uselessness ("kept to not
+  affect the function signature but won't be called")
+- `git_ops.workspace_path` and `git_ops.default_branch` are public. They were private and
+  three modules imported them anyway — an underscore everyone ignores documents nothing
+
 **Scope gate**
 - A third gate, running before the container and before the reviewer: does the change
   touch the files the task declared? Two pull requests had already reached a human with

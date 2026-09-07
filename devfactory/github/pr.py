@@ -16,7 +16,7 @@ import git
 
 from devfactory.context import PipelineContext
 from devfactory.github.client import gh
-from devfactory.github.git_ops import _default_branch, _workspace_path
+from devfactory.github.git_ops import default_branch, workspace_path
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +33,8 @@ def create_or_update_pr(ctx: PipelineContext) -> tuple[str, int]:
     repo = gh.get_repo(ctx.issue.repo)
 
     # Detect default branch from local clone
-    local_repo = git.Repo(_workspace_path(ctx))
-    base = _default_branch(local_repo)
+    local_repo = git.Repo(workspace_path(ctx))
+    base = default_branch(local_repo)
 
     # Check if PR already exists for this branch
     existing = list(repo.get_pulls(state="open", head=f"{ctx.repo_owner}:{ctx.branch_name}"))

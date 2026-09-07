@@ -140,3 +140,24 @@ def test_auto_pull_can_be_switched_off(fake, monkeypatch):
 
     assert ensure_models_available() == []
     assert f.pulled == []
+
+
+def test_cli_sync_delegates_to_provisioning(monkeypatch):
+    """`devfactory models --sync` and the pipeline must pull through the same code.
+
+    Two implementations of "pull what the registry declares" would drift, and the
+    one that drifted would be the one nobody ran that day.
+    """
+    from devfactory import cli
+
+    calls = []
+    monkeypatch.setattr(
+        "devfactory.models.provisioning.ensure_models_available",
+        lambda: calls.append("called") or ["some-model"],
+    )
+    monkeypatch.setattr("devfactory.models.client.ollama.list_models", lambda: ["some-model"])
+
+    result = cli._sync_models(set())
+
+    assert calls == ["called"]
+    assert "some-model" in result

@@ -164,35 +164,24 @@ def logs(
 def _sync_models(available: set[str]) -> set[str]:
     """Pull every registered model that Ollama does not have yet.
 
-    The registry is the source of truth. Any model listed there but absent from
-    Ollama is pulled via the Ollama API; models already present are left as-is.
-    Returns the refreshed set of available model names so the caller can render
-    an up-to-date table.
+    Thin wrapper over :func:`devfactory.models.provisioning.ensure_models_available`,
+    which the pipeline also calls at the start of a run. Two implementations of
+    "pull what the registry declares" would drift, and the one that drifted would
+    be the one nobody ran that day.
     """
     from devfactory.models.client import ollama
-    from devfactory.models.registry import MODELS
+    from devfactory.models.provisioning import ensure_models_available
 
-    missing = [m.name for m in MODELS if m.name not in available]
-    if not missing:
+    pulled = ensure_models_available()
+    if not pulled:
         console.print("[green]✓ All registered models are already pulled in Ollama[/]")
         return available
 
-    console.print(f"[bold]Pulling {len(missing)} missing model(s): {', '.join(missing)}[/]")
-    for name in missing:
-        console.print(f"  → pulling [cyan]{name}[/] (this can take a while)…")
-        try:
-            ollama.pull_model(name)
-            console.print(f"    [green]✓ {name} pulled[/]")
-        except Exception as e:
-            # Do not abort the whole sync on one failure: report and move on so
-            # the remaining models still get pulled.
-            console.print(f"    [red]✗ failed to pull {name}: {e}[/]")
-
-    # Re-list so the caller sees what actually made it into Ollama.
+    console.print(f"[green]✓ Pulled {len(pulled)} model(s): {', '.join(pulled)}[/]")
     try:
         return set(ollama.list_models())
-    except Exception:
-        return available
+    except (OSError, RuntimeError):
+        return available | set(pulled)
 
 
 def _run_init(repo: str):
