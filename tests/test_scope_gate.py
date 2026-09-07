@@ -92,3 +92,16 @@ def test_summary_names_the_files_not_the_rule():
 
 def test_summary_is_empty_when_there_is_nothing_to_say():
     assert ScopeReport().summary() == ""
+
+
+def test_nothing_produced_is_never_satisfied():
+    report = ScopeReport.nothing_produced()
+
+    assert not report.satisfied
+    assert "changed no files at all" in report.summary()
+
+
+def test_nothing_produced_says_the_repository_is_unchanged():
+    """The developer has to be told the work is not already done — a model that
+    produced nothing often believes it did."""
+    assert "the repository is unchanged" in ScopeReport.nothing_produced().summary()

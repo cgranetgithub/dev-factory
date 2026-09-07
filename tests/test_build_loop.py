@@ -69,6 +69,7 @@ def pipeline(monkeypatch, tmp_path):
     monkeypatch.setattr(git_ops, "changed_python_files", lambda ctx: [])
     monkeypatch.setattr(git_ops, "get_diff", lambda ctx: "diff")
     monkeypatch.setattr(git_ops, "files_changed_on_branch", lambda ctx: [])
+    monkeypatch.setattr(git_ops, "working_tree_has_changes", lambda ctx: True)
     monkeypatch.setattr(autofix_module, "autofix", lambda *a, **k: 0)
 
     from devfactory.kb import database
@@ -249,8 +250,45 @@ def test_scope_gate_shares_the_retry_budget(pipeline, monkeypatch):
 
     monkeypatch.setattr(settings, "max_verification_retries", 2)
     monkeypatch.setattr(git_ops, "files_changed_on_branch", lambda ctx: [])
+    monkeypatch.setattr(git_ops, "working_tree_has_changes", lambda ctx: True)
     pipeline.verification = _Recorder([True], _set_report)
     pipeline.reviewer = _Recorder(["approved"], _set_review)
 
     with pytest.raises(VerificationFailedError, match="does not touch the files"):
         pipeline._build_loop(_spec_ctx(["a.py"]), task_id=1)
+
+
+def test_an_iteration_that_produces_nothing_is_sent_back(pipeline, monkeypatch):
+    """Issue #22. An empty change must not reach the gates: the container would
+    verify a tree that is still green and pass it, and the reviewer would read an
+    empty diff — the run would end in a pull request with no commits."""
+    from devfactory.config import settings
+    from devfactory.github import git_ops
+
+    monkeypatch.setattr(settings, "max_verification_retries", 2)
+    monkeypatch.setattr(git_ops, "working_tree_has_changes", lambda ctx: False)
+    pipeline.verification = _Recorder([True], _set_report)
+    pipeline.reviewer = _Recorder(["approved"], _set_review)
+
+    with pytest.raises(VerificationFailedError, match="produced no changes"):
+        pipeline._build_loop(_ctx(), task_id=1)
+
+    assert pipeline.verification.calls == 0
+    assert pipeline.reviewer.calls == 0
+
+
+def test_the_developer_gets_another_attempt_after_producing_nothing(pipeline, monkeypatch):
+    """One empty attempt is a hiccup, not a verdict — it costs an iteration and the
+    developer is told, in words, that the repository is unchanged."""
+    from devfactory.github import git_ops
+
+    produced = iter([False, True, True])
+    monkeypatch.setattr(git_ops, "working_tree_has_changes", lambda ctx: next(produced))
+    pipeline.verification = _Recorder([True], _set_report)
+    pipeline.reviewer = _Recorder(["approved"], _set_review)
+
+    ctx = pipeline._build_loop(_ctx(), task_id=1)
+
+    assert pipeline.developer.calls == 2
+    assert ctx.scope_rejections == 1
+    assert pipeline.verification.calls == 1

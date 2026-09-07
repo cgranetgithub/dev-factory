@@ -135,6 +135,22 @@ def changed_python_files(ctx: PipelineContext) -> list[str]:
     return sorted(p for p in paths if (workspace / p).is_file())
 
 
+def working_tree_has_changes(ctx: PipelineContext) -> bool:
+    """Whether the checkout holds uncommitted work.
+
+    Called between the developer and the commit, so it answers "did *this*
+    iteration produce anything" rather than "does the branch differ from main".
+    Earlier iterations are already committed by then, which is what makes the
+    distinction reliable — and what two attempts at this check got wrong, one by
+    comparing against the base branch (always true from iteration two onwards) and
+    one by inspecting the index before anything was staged (never true for a plain
+    file edit).
+    """
+    repo = git.Repo(workspace_path(ctx))
+    # bool(): GitPython's stubs type is_dirty loosely, and mypy is the gate here.
+    return bool(repo.is_dirty(untracked_files=True))
+
+
 def files_changed_on_branch(ctx: PipelineContext) -> list[str]:
     """Return every file the branch changed relative to the default branch.
 

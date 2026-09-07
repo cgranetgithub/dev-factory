@@ -36,14 +36,30 @@ class ScopeReport:
     # punish good work. It does catch drive-by edits to unrelated files, which have
     # shown up in several runs.
     unexpected: list[str] = field(default_factory=list)
+    # The developer wrote nothing at all this iteration. Kept here rather than in a
+    # gate of its own: "the change does not cover what was asked" is one question,
+    # and producing nothing is its extreme case. A fourth counter and a fourth
+    # feedback path would buy nothing.
+    produced_nothing: bool = False
+
+    @classmethod
+    def nothing_produced(cls) -> ScopeReport:
+        return cls(produced_nothing=True)
 
     @property
     def satisfied(self) -> bool:
-        return not self.missing
+        return not self.missing and not self.produced_nothing
 
     def summary(self) -> str:
         """Feedback for the developer, naming the files rather than the rule."""
         lines = []
+        if self.produced_nothing:
+            lines.append(
+                "The previous attempt changed no files at all. Nothing was written, "
+                "edited or created.\n\nRe-read the task, open the files it names, and "
+                "make the change. If the work seems already done, it is not: the "
+                "repository is unchanged."
+            )
         if self.missing:
             lines.append(
                 "The task declared these files, but the change does not touch them:\n"

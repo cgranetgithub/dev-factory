@@ -187,12 +187,31 @@ class Pipeline:
         from devfactory.github import git_ops
         from devfactory.github.git_ops import workspace_path
         from devfactory.verification.autofix import autofix
-        from devfactory.verification.scope import check_scope
+        from devfactory.verification.scope import ScopeReport, check_scope
 
         max_retries = settings.max_verification_retries
 
         while True:
             ctx = self.developer.execute(ctx)
+
+            # Did this iteration produce anything at all? Checked before staging,
+            # so it answers for this iteration rather than for the branch. An empty
+            # change would otherwise sail through: the container verifies a tree
+            # that is still green, and the reviewer reads an empty diff.
+            if not git_ops.working_tree_has_changes(ctx):
+                ctx.scope_report = ScopeReport.nothing_produced()
+                ctx.scope_rejections += 1
+                logger.warning(
+                    f"[pipeline] Developer produced no changes — "
+                    f"iteration {ctx.iterations_used}/{max_retries}"
+                )
+                if ctx.iterations_used >= max_retries:
+                    db.update_task(task_id, status="verification_failed")
+                    raise VerificationFailedError(
+                        f"After {max_retries} attempt(s) on issue #{ctx.issue.number}, "
+                        f"the developer has produced no changes at all."
+                    )
+                continue
 
             # Clear the mechanical lint failures before the gate sees them, so the
             # retry budget is spent on real defects rather than on line length. The
