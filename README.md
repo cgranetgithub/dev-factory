@@ -45,9 +45,10 @@ Create detailed GitHub Issue    Polls for label ready-for-dev
 Label it ready-for-dev    ───►  AnalystAgent   → structured TaskSpec
                                 DeveloperAgent → writes code (with repo context)
                                 autofix        → ruff --fix + format
+                                scope gate     → declared files actually touched?
                                 VerificationRunner → ruff + mypy + bandit + pytest
                                 ReviewerAgent  → verdict vs acceptance criteria
-                                   ↑ either gate sends it back to the developer
+                                   ↑ any gate sends it back to the developer
                                      (shared budget of N iterations)
                                 Opens PR, posts the review, notifies you
                                 Scores each model → SQLite KB
@@ -63,18 +64,25 @@ You review & merge        ◄───  PR ready for your review
    create/modify, acceptance criteria, test strategy, technical notes.
 
 4. **Developer writes the code** — Another local LLM generates the implementation.
-   It reads the existing repo files to make context-aware changes.
+   It reads the existing repo files to make context-aware changes, and is expected to
+   run `ruff` and `pytest` itself before finishing. Ruff's deterministic fixes are then
+   applied to the files it touched, so the gates judge substance rather than whitespace.
 
-5. **verification runs** — The code is tested in an isolated Docker container: linting (ruff),
-   type checking (mypy), security scanning (bandit), and tests (pytest).
-   If verification fails, the developer retries (up to `DEVFACTORY_MAX_VERIFICATION_RETRIES` times) with
-   the verification report as feedback.
+5. **Three gates, cheapest first** — each can send the change back to the developer,
+   and they share one budget of `DEVFACTORY_MAX_VERIFICATION_RETRIES` iterations:
 
-6. **Two reviewers** — Two different models post inline code review comments on the PR
-   using the GitHub Review API.
+   | Gate | Cost | Question |
+   |---|---|---|
+   | Scope | a set comparison | Did the change touch the files the task declared? |
+   | Verification | a Docker run | Does it lint, type-check, scan clean and pass its tests? |
+   | Review | a model call | Does it satisfy the acceptance criteria, and is the design sound? |
 
-7. **You merge** — The PR is opened, the issue is notified, and you decide when to merge.
-   All model performance data is recorded in the local SQLite knowledge base.
+   The order matters: a check costing microseconds should not queue behind one costing
+   a minute, and neither should spend a model call on code that does not compile.
+
+6. **You merge** — The PR is opened with the review that governed the accepted iteration
+   posted on it, the issue is notified, and you decide when to merge. All model
+   performance data is recorded in the local SQLite knowledge base.
 
 ---
 
@@ -135,7 +143,8 @@ caught the error. Autonomy scales down as safety class scales up.
                                │
                     ┌──────────┴──────────┐
                     │   Model Router      │
-                    │   (random, by role) │
+                    │  random by role,    │
+                    │  or pinned (--model)│
                     └──────────┬──────────┘
                                │
                     ┌──────────┴──────────┐
@@ -234,6 +243,8 @@ cp .env.example .env
 | `GITHUB_USERNAME` | *(required)* | Your GitHub username |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
 | `OLLAMA_TIMEOUT_S` | `300` | Seconds before an LLM call times out |
+| `DEVFACTORY_MIN_OLLAMA_VERSION` | `0.33.0` | Oldest validated Ollama release; below it the run warns, never blocks |
+| `DEVFACTORY_AUTO_PULL_MODELS` | `true` | Pull registry models Ollama is missing, at the start of a run |
 | `DEVFACTORY_POLL_INTERVAL` | `60` | Seconds between GitHub polls |
 | `DEVFACTORY_DB_PATH` | `./devfactory.db` | SQLite knowledge-base path |
 | `DEVFACTORY_WORKSPACE` | `/tmp/devfactory` | Directory where repos are cloned |
@@ -375,7 +386,8 @@ scores      (id, execution_id, metric, value, notes, created_at)
 | `security_score` | bandit severity | 0.2 / 0.5 / 0.8 / 1.0 |
 | `review_verdict` | reviewer verdict | 0.3 / 0.6 / 1.0 |
 | `review_quality` | reviewer self-score | 0.0 – 1.0 |
-| `retry_count` | Verification iterations | 0, 1, 2, … |
+| `retry_count` | Loop iterations, all gates | 0, 1, 2, … |
+| `lint_left_behind` | Lint issues the developer left for autofix | 0, 1, 2, … |
 
 After enough pipeline runs you get an objective, data-driven ranking of which local
 models perform best for which roles — without any subjective opinion.
@@ -394,7 +406,8 @@ devfactory/
 │   │   ├── verification.py  # Orchestrates the Docker verification runner
 │   │   └── reviewer.py      # Diff + verification → inline GitHub review
 │   ├── verification/
-│   │   ├── autofix.py       # Deterministic ruff pass before the gate
+│   │   ├── autofix.py       # Deterministic ruff pass before the gates
+│   │   ├── scope.py         # Did the change touch the files the task declared?
 │   │   └── runner.py        # Docker verification execution (ruff/mypy/bandit/pytest)
 │   ├── github/
 │   │   ├── client.py        # Lazy PyGitHub singleton
@@ -410,6 +423,7 @@ devfactory/
 │   ├── models/
 │   │   ├── client.py        # Ollama API wrapper
 │   │   ├── registry.py      # Model catalogue — edit this to add models
+│   │   ├── provisioning.py  # Ollama version check + pulling missing models
 │   │   ├── router.py        # Random model selection by role
 │   │   └── retry.py         # Retry decorator for network calls
 │   ├── config.py            # Pydantic settings
