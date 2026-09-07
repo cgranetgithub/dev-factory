@@ -36,12 +36,10 @@ class Scorer:
     def _score_entry(self, exec_id: int, entry: dict, ctx: PipelineContext):
         agent = entry["agent"]
 
-        if agent == "verification":
-            # Verification scores are now attributed to the developer execution
-            # This branch is kept to not affect the function signature but won't be called
-            # in practice with the new logic
-            pass
-        elif agent == "reviewer":
+        # No branch for "verification": that agent runs deterministic tools and
+        # never logs an execution, and its results are scored on the developer's
+        # entry instead — see _score_developer_quality.
+        if agent == "reviewer":
             self._score_reviewer(exec_id, ctx)
         elif agent == "developer":
             self._score_developer_quality(exec_id, ctx)

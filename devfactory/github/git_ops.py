@@ -23,7 +23,13 @@ def _repo_url(owner: str, repo_name: str) -> str:
     return f"https://{token}@github.com/{owner}/{repo_name}.git"
 
 
-def _workspace_path(ctx: PipelineContext) -> Path:
+def workspace_path(ctx: PipelineContext) -> Path:
+    """Local checkout for this run's repository.
+
+    Public because three modules outside this one need it. It was private, and
+    they imported it anyway — a leading underscore that everyone ignores documents
+    nothing and misleads the next reader.
+    """
     return settings.workspace / ctx.repo_name
 
 
@@ -41,7 +47,7 @@ def setup_branch(ctx: PipelineContext) -> git.Repo:
     Sets ctx.branch_name.
     Returns the GitPython Repo object.
     """
-    workspace = _workspace_path(ctx)
+    workspace = workspace_path(ctx)
     url = _repo_url(ctx.repo_owner, ctx.repo_name)
 
     # Clone or update
@@ -51,8 +57,8 @@ def setup_branch(ctx: PipelineContext) -> git.Repo:
         origin = repo.remotes.origin
         origin.set_url(url)
         # Reset to clean state on default branch
-        default_branch = _default_branch(repo)
-        repo.git.checkout(default_branch)
+        base = default_branch(repo)
+        repo.git.checkout(base)
         origin.pull()
     else:
         logger.info(f"[git] cloning {ctx.issue.repo} → {workspace}")
@@ -77,7 +83,7 @@ def commit_changes(ctx: PipelineContext, attempt: int = 1) -> str:
     Stage all changes and commit them.
     Returns the commit SHA.
     """
-    workspace = _workspace_path(ctx)
+    workspace = workspace_path(ctx)
     repo = git.Repo(workspace)
 
     # Stage everything
@@ -115,7 +121,7 @@ def changed_python_files(ctx: PipelineContext) -> list[str]:
     Covers both tracked modifications and new files, since an agent typically does
     both in one pass. Deleted files are excluded — there is nothing left to format.
     """
-    workspace = _workspace_path(ctx)
+    workspace = workspace_path(ctx)
     repo = git.Repo(workspace)
 
     # Tracked files modified in the working tree (diff against the index target).
@@ -136,9 +142,9 @@ def files_changed_on_branch(ctx: PipelineContext) -> list[str]:
     what the finished work touched, and a file created on the first iteration is
     still part of the change on the third.
     """
-    workspace = _workspace_path(ctx)
+    workspace = workspace_path(ctx)
     repo = git.Repo(workspace)
-    default = _default_branch(repo)
+    default = default_branch(repo)
     try:
         out: str = repo.git.diff(f"{default}...HEAD", "--name-only", "--no-color")
     except git.GitCommandError as e:
@@ -149,7 +155,7 @@ def files_changed_on_branch(ctx: PipelineContext) -> list[str]:
 
 def push_branch(ctx: PipelineContext):
     """Push the feature branch to origin."""
-    workspace = _workspace_path(ctx)
+    workspace = workspace_path(ctx)
     repo = git.Repo(workspace)
     url = _repo_url(ctx.repo_owner, ctx.repo_name)
     repo.remotes.origin.set_url(url)
@@ -162,9 +168,9 @@ def get_diff(ctx: PipelineContext) -> str:
     Return the diff between the feature branch and the default branch.
     Used to inject into reviewer prompts.
     """
-    workspace = _workspace_path(ctx)
+    workspace = workspace_path(ctx)
     repo = git.Repo(workspace)
-    default = _default_branch(repo)
+    default = default_branch(repo)
     try:
         diff: str = repo.git.diff(f"{default}...HEAD", "--stat", "-p", "--no-color")
         # Truncate to ~20K chars to fit in context
@@ -176,8 +182,11 @@ def get_diff(ctx: PipelineContext) -> str:
         return "[diff unavailable]"
 
 
-def _default_branch(repo: git.Repo) -> str:
-    """Detect the default branch name (main or master)."""
+def default_branch(repo: git.Repo) -> str:
+    """Detect the default branch name (main or master).
+
+    Public for the same reason as workspace_path: pr.py already imports it.
+    """
     try:
         branches = [b.name for b in repo.branches]
         if "main" in branches:
