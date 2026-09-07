@@ -154,12 +154,44 @@ def files_changed_on_branch(ctx: PipelineContext) -> list[str]:
 
 
 def push_branch(ctx: PipelineContext):
-    """Push the feature branch to origin."""
+    """Push the feature branch to origin.
+
+    Fetches first, because the push uses ``--force-with-lease``. The lease is
+    evaluated against the local remote-tracking ref, so if that ref is stale — the
+    branch was deleted or moved on the remote since this workspace last looked, as
+    happens whenever a pull request is merged with "delete branch on merge", or
+    closed by hand — git refuses with::
+
+        ! [rejected] ... (stale info)
+
+    which reads like a permissions problem and is not one. Fetching first makes the
+    lease mean what it is meant to mean: refuse if someone else pushed to this
+    branch since we looked, rather than refuse because we never looked.
+    """
     workspace = workspace_path(ctx)
     repo = git.Repo(workspace)
     url = _repo_url(ctx.repo_owner, ctx.repo_name)
     repo.remotes.origin.set_url(url)
-    repo.git.push("--set-upstream", "origin", ctx.branch_name, "--force-with-lease")
+
+    try:
+        # prune: a branch deleted on the remote must disappear locally too, or its
+        # stale tracking ref is exactly what breaks the lease.
+        repo.remotes.origin.fetch(prune=True)
+    except git.GitCommandError as e:
+        # Not fatal on its own — the push below may still succeed, and its error
+        # will be the more informative one.
+        logger.warning(f"[git] could not refresh remote state before pushing ({e})")
+
+    try:
+        repo.git.push("--set-upstream", "origin", ctx.branch_name, "--force-with-lease")
+    except git.GitCommandError as e:
+        if "stale info" in str(e):
+            raise RuntimeError(
+                f"Refused to push {ctx.branch_name}: the local view of the remote "
+                f"branch is stale even after fetching. Someone changed it during "
+                f"this run — inspect it before retrying."
+            ) from e
+        raise
     logger.info(f"[git] pushed {ctx.branch_name}")
 
 
