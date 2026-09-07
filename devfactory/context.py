@@ -68,6 +68,7 @@ class PipelineContext:
     # Agent outputs
     task_spec: TaskSpec | None = None
     verification_report: VerificationReport | None = None
+    scope_report: Any | None = None  # verification.scope.ScopeReport
     review_results: list[ReviewResult] = field(default_factory=list)
 
     # Tracking
@@ -76,6 +77,10 @@ class PipelineContext:
     # from verification failures — they are different gates and the distinction
     # matters in the record — but they share one budget of developer iterations.
     review_rejections: int = 0
+    # Times the scope gate sent the change back because it did not touch the files
+    # the task declared. Separate from the other two: a different gate, and the
+    # distinction matters when reading the record afterwards.
+    scope_rejections: int = 0
     # True when the budget ran out with the reviewer still requesting changes: the
     # PR is opened anyway for the human to arbitrate, and this keeps the unsatisfied
     # gate visible instead of silently dropping it.
@@ -95,10 +100,10 @@ class PipelineContext:
     def iterations_used(self) -> int:
         """Developer iterations consumed, whichever gate sent the change back.
 
-        Both gates draw on the same budget: a change that alternates between failing
-        verification and being sent back by the reviewer must still terminate.
+        Every gate draws on the same budget: a change that alternates between them
+        must still terminate.
         """
-        return self.verification_attempts + self.review_rejections
+        return self.verification_attempts + self.review_rejections + self.scope_rejections
 
     def log_execution(
         self,

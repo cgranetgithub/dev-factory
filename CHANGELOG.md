@@ -7,6 +7,17 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+**Scope gate**
+- A third gate, running before the container and before the reviewer: does the change
+  touch the files the task declared? Two pull requests had already reached a human with
+  a feature nothing calls — the new code written, the one line wiring it in skipped —
+  and every existing gate passed them
+- Missing declared files send the change back with the filenames as feedback. Files
+  changed *outside* the task are reported but never block: an analyst cannot foresee
+  every file a correct change needs
+- `scope_rejections` joins the shared iteration budget, so a bad file list cannot loop
+  forever. The analyst now logs the files it declared, since they are a gate input
+
 **Models**
 - `qwen3.8:27b` replaces `qwen3.6:27b`. Same size on disk and the same 4/4 over two
   trials, but 42s and 58s against 670s and 153s — which removes the only reason its
