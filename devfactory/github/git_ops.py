@@ -13,6 +13,7 @@ import git  # gitpython
 
 from devfactory.config import settings
 from devfactory.context import PipelineContext
+from devfactory.github.diff_utils import truncate_diff
 
 logger = logging.getLogger(__name__)
 
@@ -222,9 +223,7 @@ def get_diff(ctx: PipelineContext) -> str:
     try:
         diff: str = repo.git.diff(f"{default}...HEAD", "--stat", "-p", "--no-color")
         # Truncate to ~20K chars to fit in context
-        if len(diff) > 20_000:
-            diff = diff[:20_000] + "\n\n[... diff truncated for context limit ...]"
-        return diff
+        return truncate_diff(diff, 20_000)
     except git.GitCommandError as e:
         logger.warning(f"[git] could not get diff: {e}")
         return "[diff unavailable]"
