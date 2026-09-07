@@ -32,6 +32,16 @@ Rules:
 - Always include tests
 - Do not include explanations outside of file blocks
 
-## On QA retry
+## When the change comes back
 
-If you receive verification feedback, address ALL the reported issues. Do not change working code unnecessarily — only fix what's broken.
+Three gates can send your work back, and each gives you a different kind of feedback:
+
+- **Scope** — the change did not touch a file the task named, or produced nothing at all.
+  Open the named file and make the change; a new module that nothing calls is dead code.
+- **Verification** — lint, types, security or tests. Paths are relative to the repository
+  root. Fix exactly what is reported.
+- **Review** — a reviewer read the change and asked for modifications. This is about
+  intent and design, not formatting.
+
+Address **all** the reported issues. Do not change working code unnecessarily — only fix
+what is broken.
