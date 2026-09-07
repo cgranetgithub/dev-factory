@@ -1,66 +1,86 @@
-"""
-Diff utility functions for truncating git diffs at file boundaries.
-"""
+"""Utility functions for handling git diffs."""
 
 from __future__ import annotations
 
 
 def truncate_diff(diff: str, max_chars: int) -> str:
     """
-    Truncate a git diff to a maximum number of characters, preserving complete file sections.
-
-    If the diff is already shorter than or equal to max_chars, it's returned unchanged.
-    For diffs longer than max_chars, the function truncates at file boundaries
-    (starting with 'diff --git '), preserving complete file sections.
+    Truncate a git diff at file boundaries instead of arbitrary character indices.
 
     Args:
         diff: The git diff string to truncate
-        max_chars: Maximum allowed characters in the result
+        max_chars: Maximum number of characters allowed in the result
 
     Returns:
-        The truncated diff string with optional footer indicating omitted files,
-        or the original diff if it's already within the limit
+        The truncated diff with a footer listing omitted files, or the original diff
+        if it's already within the limit.
     """
-    # If the diff is already short enough, return as-is
-    if len(diff) <= max_chars:
+    if not diff or len(diff) <= max_chars:
         return diff
 
-    # Split on 'diff --git ' to identify file sections
-    parts = diff.split("diff --git ")
+    # Split the diff into sections based on file boundaries
+    # Note: sections[0] may be empty or contain a preamble; all others are actual files
+    sections = diff.split("diff --git ")
 
-    # If there's only one part (no 'diff --git ' markers), it's not a standard git diff
-    # Truncate normally with footer
-    if len(parts) <= 1:
-        return diff[:max_chars] + "\n\n[... diff truncated for context limit ...]"
+    # If there are no sections (unexpected), return as-is
+    if not sections or len(sections) <= 1:
+        return diff
 
-    # Start with first part (should be the header, may be empty)
-    result_parts = [parts[0]]
-    result_length = len(parts[0])
+    result_lines = []
+    total_length = 0
 
-    # Process each file section
-    for i in range(1, len(parts)):
-        # Reconstruct file section by adding back "diff --git "
-        file_section = f"diff --git {parts[i]}"
+    # Process file sections until we can't fit another one
+    i = 1  # Start from index 1 since index 0 is preamble or empty
+    omitted_files = []
 
-        # Calculate potential length if we include this section
-        potential_length = result_length + len(file_section)
+    while i < len(sections):
+        section = "diff --git " + sections[i]
+        section_len = len(section)
 
-        # If adding this would exceed the limit...
-        if potential_length > max_chars:
-            # If we're at the first file and it alone already exceeds max_chars,
-            # just truncate it
-            if i == 1 and len(file_section) > max_chars:
-                return diff[:max_chars] + "\n\n[... diff truncated for context limit ...]"
+        # Check if we can add this entire section without exceeding limit
+        if total_length + section_len <= max_chars:
+            result_lines.append(section)
+            total_length += section_len
+            i += 1
+        else:
+            # Cannot include complete file - check edge case first
+            if len(result_lines) == 0:
+                # No files included yet, so truncate the next section
+                truncated_section = section[:max_chars]
+                result_lines.append(truncated_section)
+                omitted_files.append(_extract_filename(section))
+            else:
+                # Include the remaining sections as omitted
+                for j in range(i, len(sections)):
+                    if sections[j]:  # Only if there's content
+                        omitted_files.append(_extract_filename("diff --git " + sections[j]))
 
-            # Otherwise, stop here and add footer indicating how many files were omitted
-            omitted_count = len(parts) - i
-            if omitted_count > 0:
-                footer = f"\n\n[... {omitted_count} more file(s) omitted ...]"
-                return "".join(result_parts) + footer
+            break
 
-        # Add this file section to result
-        result_parts.append(file_section)
-        result_length += len(file_section)
+    # Add footer for omitted files if any
+    if omitted_files:
+        omitted_count = len(omitted_files)
+        footer = f"[... {omitted_count} more file(s) omitted: {', '.join(omitted_files)}]"
+        result_lines.append(footer)
 
-    # If we didn't hit the limit, return as-is
-    return "".join(result_parts)
+    return "\n".join(result_lines)
+
+
+def _extract_filename(diff_section: str) -> str:
+    """
+    Extract filename from a diff --git section.
+
+    Args:
+        diff_section: A section starting with "diff --git "
+
+    Returns:
+        The filename extracted from the section.
+    """
+    lines = diff_section.split("\n")
+    for line in lines:
+        if line.startswith("diff --git "):
+            # Extract file names - format is like: diff --git a/file.txt b/file.txt
+            parts = line.split()
+            if len(parts) >= 3:
+                return parts[2][2:]  # Remove leading 'b/' prefix
+    return "unknown"
