@@ -7,14 +7,6 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-**Push**
-- `push_branch` fetches (with prune) before its `--force-with-lease` push. The lease is
-  evaluated against the local remote-tracking ref, so a branch deleted on the remote —
-  by "delete branch on merge", or by hand — made the next run on that issue die with
-  `! [rejected] ... (stale info)`, which reads like a permissions problem and is not one
-- A stale lease that survives the fetch now raises a message saying what happened;
-  other push errors keep their own
-
 **Run autonomy**
 - The pipeline applies the issue's status labels itself, whatever the outcome. They lived
   in the poller, so a run started from the CLI left the issue labelled `ready-for-dev` and
