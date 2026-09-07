@@ -161,6 +161,7 @@ class Pipeline:
         from devfactory.github import git_ops
         from devfactory.github.git_ops import _workspace_path
         from devfactory.verification.autofix import autofix
+        from devfactory.verification.scope import check_scope
 
         max_retries = settings.max_verification_retries
 
@@ -175,6 +176,38 @@ class Pipeline:
             )
 
             git_ops.commit_changes(ctx, attempt=ctx.iterations_used + 1)
+
+            # ── Gate 0: scope (a set comparison) ──────────────────────────────
+            # First because it is nearly free. The container costs a minute or two
+            # and the reviewer costs a model call; neither should queue behind a
+            # question answered by comparing two lists of paths.
+            spec = ctx.task_spec
+            declared = (spec.files_to_create + spec.files_to_modify) if spec else []
+            ctx.scope_report = check_scope(declared, git_ops.files_changed_on_branch(ctx))
+
+            if not ctx.scope_report.satisfied:
+                ctx.scope_rejections += 1
+                logger.warning(
+                    f"[pipeline] Declared files untouched: "
+                    f"{', '.join(ctx.scope_report.missing)} — "
+                    f"iteration {ctx.iterations_used}/{max_retries}"
+                )
+                if ctx.iterations_used >= max_retries:
+                    db.update_task(task_id, status="verification_failed")
+                    raise VerificationFailedError(
+                        f"After {max_retries} attempt(s) on issue #{ctx.issue.number}, "
+                        f"the change still does not touch the files the task declared:\n"
+                        f"{ctx.scope_report.summary()}"
+                    )
+                continue
+
+            if ctx.scope_report.unexpected:
+                # Not blocking: an analyst cannot foresee every file. Recorded so a
+                # model that edits unrelated files is visible in the run.
+                logger.warning(
+                    f"[pipeline] Files changed outside the task: "
+                    f"{', '.join(ctx.scope_report.unexpected)}"
+                )
 
             # ── Gate 1: verification (deterministic) ──────────────────────────
             ctx = self.verification.execute(ctx)

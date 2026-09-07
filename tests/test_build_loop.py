@@ -68,6 +68,7 @@ def pipeline(monkeypatch, tmp_path):
     monkeypatch.setattr(git_ops, "commit_changes", lambda ctx, attempt=1: "sha")
     monkeypatch.setattr(git_ops, "changed_python_files", lambda ctx: [])
     monkeypatch.setattr(git_ops, "get_diff", lambda ctx: "diff")
+    monkeypatch.setattr(git_ops, "files_changed_on_branch", lambda ctx: [])
     monkeypatch.setattr(autofix_module, "autofix", lambda *a, **k: 0)
 
     from devfactory.kb import database
@@ -187,3 +188,69 @@ def test_exhausted_budget_on_review_opens_the_pr_and_flags_it(pipeline, monkeypa
 
     assert ctx.review_unresolved is True
     assert ctx.review_rejections == 2
+
+
+def _spec_ctx(declared: list[str]) -> PipelineContext:
+    """A context whose task declares files, for the scope gate."""
+    ctx = _ctx()
+    assert ctx.task_spec is not None
+    ctx.task_spec.files_to_modify = declared
+    return ctx
+
+
+def test_scope_gate_sends_back_a_change_that_misses_a_declared_file(pipeline, monkeypatch):
+    """The unwired-module case. The two expensive gates must never see it: the
+    container costs a minute or two, the reviewer costs a model call, and the
+    answer was a set comparison away."""
+    from devfactory.github import git_ops
+
+    monkeypatch.setattr(git_ops, "files_changed_on_branch", lambda ctx: ["a.py"])
+    pipeline.verification = _Recorder([True], _set_report)
+    pipeline.reviewer = _Recorder(["approved"], _set_review)
+
+    with pytest.raises(VerificationFailedError, match="does not touch the files"):
+        pipeline._build_loop(_spec_ctx(["a.py", "b.py"]), task_id=1)
+
+    assert pipeline.developer.calls == 3, "the developer got its retries"
+    assert pipeline.verification.calls == 0, "the container ran on a change the gate rejects"
+    assert pipeline.reviewer.calls == 0, "the model ran on a change the gate rejects"
+
+
+def test_scope_gate_lets_a_complete_change_through(pipeline, monkeypatch):
+    from devfactory.github import git_ops
+
+    monkeypatch.setattr(git_ops, "files_changed_on_branch", lambda ctx: ["a.py", "b.py"])
+    pipeline.verification = _Recorder([True], _set_report)
+    pipeline.reviewer = _Recorder(["approved"], _set_review)
+
+    ctx = pipeline._build_loop(_spec_ctx(["a.py", "b.py"]), task_id=1)
+
+    assert ctx.scope_rejections == 0
+    assert pipeline.verification.calls == 1
+
+
+def test_extra_files_do_not_block_the_loop(pipeline, monkeypatch):
+    from devfactory.github import git_ops
+
+    monkeypatch.setattr(git_ops, "files_changed_on_branch", lambda ctx: ["a.py", "README.md"])
+    pipeline.verification = _Recorder([True], _set_report)
+    pipeline.reviewer = _Recorder(["approved"], _set_review)
+
+    ctx = pipeline._build_loop(_spec_ctx(["a.py"]), task_id=1)
+
+    assert ctx.scope_rejections == 0
+    assert ctx.scope_report.unexpected == ["README.md"]
+
+
+def test_scope_gate_shares_the_retry_budget(pipeline, monkeypatch):
+    """It must not become a way to loop forever on an analyst's bad file list."""
+    from devfactory.config import settings
+    from devfactory.github import git_ops
+
+    monkeypatch.setattr(settings, "max_verification_retries", 2)
+    monkeypatch.setattr(git_ops, "files_changed_on_branch", lambda ctx: [])
+    pipeline.verification = _Recorder([True], _set_report)
+    pipeline.reviewer = _Recorder(["approved"], _set_review)
+
+    with pytest.raises(VerificationFailedError, match="does not touch the files"):
+        pipeline._build_loop(_spec_ctx(["a.py"]), task_id=1)

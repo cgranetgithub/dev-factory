@@ -33,8 +33,13 @@ class AnalystAgent(BaseAgent):
 
         response = self.chat(ctx, messages, temperature=0.1, max_tokens=4096)
         ctx.task_spec = self._parse_task_spec(response.content)
+        spec = ctx.task_spec
+        # The declared files are now a gate input, not a hint: log them so a scope
+        # rejection can be read against what the analyst actually asked for.
+        declared = spec.files_to_create + spec.files_to_modify
         logger.info(
-            f"[analyst] TaskSpec created: {len(ctx.task_spec.acceptance_criteria)} criteria"
+            f"[analyst] TaskSpec created: {len(spec.acceptance_criteria)} criteria, "
+            f"{len(declared)} file(s) declared: {', '.join(declared) or 'none'}"
         )
         return ctx
 

@@ -99,6 +99,14 @@ class DeveloperAgent(BaseAgent):
                 f"{ctx.verification_report.summary}"
             )
 
+        # On a scope rejection: the change did not reach the files the task named.
+        # Shown before the other feedback because it is the most concrete thing the
+        # developer can act on — a named file it has not opened.
+        if ctx.scope_rejections > 0 and ctx.scope_report is not None:
+            parts.append(
+                f"\n## Scope Feedback (rejection {ctx.scope_rejections})\n"
+                f"{ctx.scope_report.summary()}"
+            )
         # On rejection: the reviewer read the change and sent it back. Its comments
         # are about intent and design, not mechanics — verification already covers
         # those — so they are shown separately rather than merged into one list.
@@ -289,6 +297,14 @@ class DeveloperAgent(BaseAgent):
                 f"{ctx.verification_report.summary}"
             )
 
+        # On a scope rejection: the change did not reach the files the task named.
+        # Shown before the other feedback because it is the most concrete thing the
+        # developer can act on — a named file it has not opened.
+        if ctx.scope_rejections > 0 and ctx.scope_report is not None:
+            parts.append(
+                f"\n## Scope Feedback (rejection {ctx.scope_rejections})\n"
+                f"{ctx.scope_report.summary()}"
+            )
         # On rejection: the reviewer read the change and sent it back. Its comments
         # are about intent and design, not mechanics — verification already covers
         # those — so they are shown separately rather than merged into one list.

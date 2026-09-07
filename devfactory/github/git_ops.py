@@ -129,6 +129,24 @@ def changed_python_files(ctx: PipelineContext) -> list[str]:
     return sorted(p for p in paths if (workspace / p).is_file())
 
 
+def files_changed_on_branch(ctx: PipelineContext) -> list[str]:
+    """Return every file the branch changed relative to the default branch.
+
+    Cumulative on purpose, unlike :func:`changed_python_files`: the scope gate asks
+    what the finished work touched, and a file created on the first iteration is
+    still part of the change on the third.
+    """
+    workspace = _workspace_path(ctx)
+    repo = git.Repo(workspace)
+    default = _default_branch(repo)
+    try:
+        out: str = repo.git.diff(f"{default}...HEAD", "--name-only", "--no-color")
+    except git.GitCommandError as e:
+        logger.warning(f"[git] could not list changed files: {e}")
+        return []
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
 def push_branch(ctx: PipelineContext):
     """Push the feature branch to origin."""
     workspace = _workspace_path(ctx)
