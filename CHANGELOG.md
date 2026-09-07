@@ -7,6 +7,14 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+**Analyst**
+- An unparseable analyst response no longer degrades into an empty `TaskSpec` that the
+  pipeline runs on anyway. The analyst is asked again, with the problem named, up to
+  three times; a run that still has no usable plan stops instead of spending a GPU hour
+  on an issue title
+- This mattered more than it looks: an empty spec declares no files, so the scope gate
+  checks nothing — the gate switched itself off exactly when it was most needed
+
 **Coherence**
 - `devfactory models --sync` now delegates to the same `ensure_models_available()` the
   pipeline calls. There were two implementations of "pull what the registry declares";
