@@ -7,6 +7,14 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+**Empty changes**
+- An iteration that produces nothing is sent back to the developer instead of being
+  committed and gated. Closes the hole behind the original `422 No commits between`:
+  the container verifies a tree that is still green and passes it, and the reviewer
+  reads an empty diff
+- Folded into the scope gate rather than added as a fourth one — "the change does not
+  cover what was asked" is one question, and producing nothing is its extreme case
+
 **Run autonomy**
 - The pipeline applies the issue's status labels itself, whatever the outcome. They lived
   in the poller, so a run started from the CLI left the issue labelled `ready-for-dev` and
