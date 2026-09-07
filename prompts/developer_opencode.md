@@ -45,7 +45,17 @@ Rules for this phase:
 - Prefer simple, readable code over clever abstractions.
 - Everything in English: code, identifiers, comments, docstrings.
 
-## On QA retry
+## When the change comes back
 
-If the task includes verification feedback from a previous attempt, address **all** the
-reported issues. Do not change working code unnecessarily — only fix what is broken.
+Three gates can send your work back, and each gives you a different kind of feedback:
+
+- **Scope** — the change did not touch a file the task named, or produced nothing at all.
+  Open the named file and make the change there. A new module that nothing calls is dead
+  code: writing a function is only half the task, wiring it in is the other half.
+- **Verification** — lint, types, security or tests. Paths are relative to the repository
+  root, so you can open them directly. Fix exactly what is reported.
+- **Review** — a reviewer read the change and asked for modifications. This is about
+  intent and design, not formatting.
+
+Address **all** the reported issues. Do not change working code unnecessarily — only fix
+what is broken.

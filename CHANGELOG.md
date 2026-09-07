@@ -7,6 +7,11 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+**Prompts**
+- The developer prompts describe the three gates that can send work back and what each
+  one's feedback means. They still said "On QA retry" and only knew about verification,
+  so a scope rejection arrived as feedback the prompt had never mentioned
+
 **Run autonomy**
 - The pipeline applies the issue's status labels itself, whatever the outcome. They lived
   in the poller, so a run started from the CLI left the issue labelled `ready-for-dev` and
