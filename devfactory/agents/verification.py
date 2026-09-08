@@ -1,6 +1,9 @@
 """
-Verification Agent — interprets the Docker verification report and decides pass/retry.
-The actual test execution happens in devfactory.verification.runner (Docker).
+Verification Agent — runs the deterministic checks and records the report.
+
+Ruff, mypy, bandit and pytest run in Docker (devfactory.verification.runner). This
+agent calls no model; the graph reads the report and decides whether the change
+proceeds or goes back.
 """
 
 from __future__ import annotations

@@ -73,7 +73,7 @@ def mark_ready_for_review(repo: str, issue_number: int, pr_url: str):
     logger.info(f"[issues] #{issue_number} marked ready-for-review")
 
 
-def mark_qa_failed(repo: str, issue_number: int, report: str):
+def mark_verification_failed(repo: str, issue_number: int, report: str):
     """Swap in-progress → verification-failed and post the last verification report as a comment.
 
     Called when the Dev↔Verification loop has exhausted all its attempts: this case is

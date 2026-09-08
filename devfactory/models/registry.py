@@ -46,23 +46,12 @@ class ModelMeta:
 # Ollama, and the router ignores (with an info log) any model not yet pulled.
 #
 # Policy: 20B parameters minimum, and every model must fit on the 24 GB card
-# (RTX 3090 Ti). Split into two families of three:
-#   * 3 models on the "developer"/coding side → this role writes code, where a
-#     model that hallucinates APIs on precise, schema-bound edits is useless.
-#     Only two dedicated coders survive the 20B floor (qwen3-coder, devstral),
-#     so the third slot is filled by a strong DENSE general model. NOTE: neither
-#     of those two can drive the "opencode" agentic loop (see drives_agentic_loop);
-#     they are registered for their roles but the router will not select them for
-#     one that needs the harness.
-#     The agentic drivers are qwen3-coder plus all three general models, so the
-#     coding/general split no longer decides who can develop: capability does.
-#     Two of the generalists (gemma4, glm-4.7-flash) therefore also carry the
-#     developer role, giving it three drivers instead of one — and leaving a
-#     reviewer that is never forced to be the developer's own model.
-#   * 3 strong general models → the "analyst" role reasons about the issue and
-#     benefits from broad reasoning rather than pure code fluency.
-# The "reviewer" role draws from ALL six, so the two reviewers can pair a coder
-# with a generalist for genuinely different perspectives on the diff.
+# (RTX 3090 Ti). Roles are assigned by measured capability, not by a model's
+# marketing: only models that drive the agentic loop (see drives_agentic_loop)
+# are ever selected, and the two that do not are kept here as recorded
+# measurements rather than candidates. Four models drive it today, so the
+# developer role has redundancy and the reviewer is never forced onto the
+# developer's model.
 #
 # VRAM: Ollama loads one model at a time, so the constraint is per-model, not the
 # sum — each entry must fit on 24 GB with room left for the KV cache. Models near
@@ -74,18 +63,11 @@ class ModelMeta:
 #
 # Roles: "analyst", "developer", "reviewer"
 
-# Coding side — developer (+ reviewer). Two dedicated coders (Qwen qwen3-coder /
-# Mistral devstral) plus one dense general model, since no third dedicated coder
-# clears the 20B floor while fitting the card.
+# Dedicated coders: developer and reviewer, not analyst — reading a vague request
+# and finding where the problem lives is a reasoning task more than a coding one.
 _CODING_ROLES = ["developer", "reviewer"]
-# General models — analyst (+ reviewer). Strongest locally-runnable variants of
-# the top open-weight families (the true GLM-4.7 / Qwen3 flagships are 200B+ and
-# do not fit on this host).
-_GENERAL_ROLES = ["analyst", "reviewer"]
-# General models that also qualified as agentic drivers, and are fast enough to
-# sit in a loop that may run three times behind two gates. They take the
-# developer role as well, which is what gives that role redundancy: without them
-# a single unavailable model takes the whole factory offline.
+# General models fast enough to sit in a loop that may run three times behind
+# three gates: every role. This is what gives the developer redundancy.
 _GENERAL_AND_DEV_ROLES = ["analyst", "developer", "reviewer"]
 
 MODELS: list[ModelMeta] = [

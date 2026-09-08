@@ -161,27 +161,28 @@ All agents share a `PipelineContext` dataclass — a single object passed throug
 entire pipeline. It holds the issue, the task spec, verification reports, review results, commits,
 and execution logs. Nothing is global; everything is traceable.
 
-### Model rotation
+### Model selection
 
-Each agent role (analyst, developer, reviewer) selects a model **randomly** from the
-registered models that declare that role. This enables A/B comparisons across many
-pipeline runs without any manual configuration.
+Each role (analyst, developer, reviewer) draws a model **at random** from the registry
+entries that declare that role and **drive the agentic loop** — the ability to read
+files, edit them and run commands rather than describe a change in prose. Ollama's
+`tools` capability flag is necessary but not sufficient for that; the registry records
+what was actually measured, and the router never selects a model that was not.
 
-Two constraints narrow the random draw:
+Two things shape the draw:
 
-- **Model stability inside a run** — no role excludes the model it used last time.
-  Both the developer and the reviewer re-run on successive versions of the same change:
-  the developer must keep the model that has the context (and its pool has a single
-  agentic driver), and rotating the reviewer would move the verdict for reasons
-  unrelated to the code. Diversity comes from the random draw *across* runs.
-- **Agentic-loop capability** — every agent runs through the harness, so its model has
-  to actually drive a tool-calling loop. Ollama's `tools` capability flag is necessary but
-  **not** sufficient: several tool-capable models simply answer in prose and edit nothing.
-  Only models verified to drive the loop carry `drives_agentic_loop=True` in the registry,
-  and the developer requires that flag when the backend is `opencode`.
+- **The reviewer refuses the developer's model.** An agent reviewing its own work is
+  not a review. With four agentic drivers this costs nothing.
+- **Within a run, a role keeps its model.** A developer that changed model on every
+  retry would lose the context it had built; a reviewer that changed would move its
+  verdict for reasons unrelated to the code. Diversity comes from the draw *across*
+  runs — which is what the knowledge base compares.
 
-The `opencode` backend needs a large context window on the Ollama side —
-set `OLLAMA_CONTEXT_LENGTH=32768` (or more) in the Ollama service environment.
+Pin a role with `devfactory run -m developer=gemma4:26b` to make two runs comparable.
+
+The harness needs a large context window on the Ollama side — set
+`OLLAMA_CONTEXT_LENGTH=32768` (or more) in the Ollama service environment. Below that,
+the tool definitions overflow and a capable model looks incapable.
 
 ---
 
@@ -425,7 +426,7 @@ devfactory/
 │   └── cli.py               # Typer CLI
 ├── prompts/
 │   ├── analyst.md           # Analyst system prompt
-│   ├── developer.md         # Developer system prompt
+│   ├── developer_opencode.md # Developer system prompt (agentic, with a definition of done)
 │   └── reviewer.md          # Reviewer system prompt
 ├── docker/
 │   └── Dockerfile.test      # Verification test environment
