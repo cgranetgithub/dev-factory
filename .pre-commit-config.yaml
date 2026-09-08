@@ -1,0 +1,36 @@
+# Runs before each commit what CI would otherwise reject a round trip later —
+# and with dismiss_stale_reviews_on_push enabled, a formatting fix pushed after
+# approval throws the approval away. One-time setup: `pre-commit install`.
+#
+# Lint and format only. The test suite runs in CI; running it on every commit
+# would cost more time than it saves.
+#
+# ruff is run from the environment, not from a pinned pre-commit mirror: the
+# version is then the one pyproject.toml resolves — the same one CI installs —
+# so the hook and the gate cannot disagree about what is clean.
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: ruff check --fix
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+      - id: ruff-format
+        name: ruff format
+        entry: ruff format
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files

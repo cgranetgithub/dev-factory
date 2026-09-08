@@ -28,6 +28,10 @@ source .venv/bin/activate  # Windows: .venv\Scripts\activate
 # Install in editable mode with dev tools
 uv pip install -e ".[dev]"
 
+# Install the git hooks: ruff runs on every commit, so a formatting slip is
+# caught here rather than by CI one round trip later
+pre-commit install
+
 # Copy and fill in environment variables
 cp .env.example .env
 # → edit .env with your GITHUB_TOKEN and GITHUB_USERNAME
@@ -74,9 +78,12 @@ devfactory/
 
 ### Style
 
-- Max line length: **100 characters** (enforced by ruff).
+- Max line length: **100 characters** (enforced by ruff; `.editorconfig` tells your
+  editor the same).
 - Imports sorted by: stdlib → third-party → devfactory (ruff isort).
-- Run `ruff check .` and `ruff format .` before committing.
+- `ruff check --fix` and `ruff format` run as pre-commit hooks (see
+  `.pre-commit-config.yaml`); if you skipped `pre-commit install`, run them by hand
+  before committing.
 
 ### Docstrings
 
