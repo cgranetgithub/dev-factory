@@ -19,6 +19,9 @@ LABEL_PROGRESS = "devfactory:in-progress"
 LABEL_VERIFICATION_FAILED = "devfactory:verification-failed"
 LABEL_REVIEW = "devfactory:ready-for-review"
 LABEL_ERROR = "devfactory:error"
+# Marks the issues the analyst writes, so they can be filtered out of the list a
+# human reads — there is one per task.
+LABEL_SPEC = "devfactory:spec"
 
 # Colors for auto-created labels
 LABEL_COLORS = {
@@ -26,6 +29,7 @@ LABEL_COLORS = {
     LABEL_VERIFICATION_FAILED: "e4e669",
     LABEL_REVIEW: "0e8a16",
     LABEL_ERROR: "d73a4a",
+    LABEL_SPEC: "5319e7",
 }
 
 

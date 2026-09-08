@@ -7,6 +7,16 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+**The analyst reads the code**
+- It runs through OpenCode read-only (`--agent plan`) with the checkout, instead of seeing
+  only the issue text. It had been declaring filenames it had never opened
+- Its specification is published as a **linked GitHub issue** labelled `devfactory:spec`,
+  cross-referenced both ways, updated rather than duplicated on a re-run. A human can read
+  and amend it before development starts
+- The clone now happens **before** the analyst — it needs a checkout to read
+- One shared OpenCode runner (`devfactory/opencode.py`) for every agent that needs the
+  codebase, instead of a second copy of the invocation
+
 **Empty changes**
 - An iteration that produces nothing is sent back to the developer instead of being
   committed and gated. Closes the hole behind the original `422 No commits between`:

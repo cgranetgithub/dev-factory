@@ -2,8 +2,8 @@
 Orchestrator — runs the sequential agent pipeline for a single GitHub issue.
 
 Flow:
-  1. Analyst    → reads issue, produces TaskSpec
-  2. Git setup  → clone repo, create feature branch
+  1. Git setup  → clone repo, create feature branch
+  2. Analyst    → reads the request AND the codebase, publishes a spec issue
   3. Dev→Verification loop → developer writes code, ruff autofixes it, verification runs
                    (max N retries)
   4. Git push   → push feature branch to remote
@@ -100,12 +100,15 @@ class Pipeline:
         prepare_host()
 
         try:
-            # ── 1. Analyst ────────────────────────────────────────────────────
-            ctx = self.analyst.execute(ctx)
-
-            # ── 2. Git: clone + create branch ─────────────────────────────────
+            # ── 1. Git: clone + create branch ─────────────────────────────────
+            # Before the analyst, not after: it reads the codebase to write the
+            # specification, so it needs a checkout. The branch is empty at this
+            # point, so what it reads is the base branch.
             self._setup_git(ctx)
             db.update_task(task_id, branch_name=ctx.branch_name)
+
+            # ── 2. Analyst ────────────────────────────────────────────────────
+            ctx = self.analyst.execute(ctx)
 
             # ── 3. Developer → verification → review loop ─────────────────────
             ctx = self._build_loop(ctx, task_id)

@@ -7,7 +7,6 @@ is invoked — we assert the command line and the KB execution record.
 
 from __future__ import annotations
 
-import json
 import subprocess
 
 import pytest
@@ -165,42 +164,6 @@ def test_opencode_backend_raises_on_nonzero_exit(monkeypatch, tmp_path):
     agent = _agent_with_model()
     with pytest.raises(RuntimeError, match="opencode run failed"):
         agent.run(_make_ctx())
-
-
-def test_opencode_env_declares_the_selected_model(monkeypatch):
-    """The provider config handed to opencode must declare the model we are about
-    to ask for — a model the registry allows but the CLI cannot resolve fails at
-    run time, after the analyst has already spent its time."""
-    monkeypatch.setattr(settings, "ollama_base_url", "http://localhost:11434")
-    agent = _agent_with_model()
-
-    env = agent._opencode_env()
-    config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
-
-    assert "qwen3-coder:30b" in config["provider"]["ollama"]["models"]
-    # The OpenAI-compatible endpoint lives under /v1, not at the server root.
-    assert config["provider"]["ollama"]["options"]["baseURL"] == "http://localhost:11434/v1"
-
-
-def test_opencode_env_keeps_the_ambient_environment(monkeypatch):
-    """PATH and friends must survive: opencode runs pytest and ruff through them."""
-    monkeypatch.setenv("DEVFACTORY_CANARY", "present")
-    agent = _agent_with_model()
-
-    env = agent._opencode_env()
-
-    assert env["DEVFACTORY_CANARY"] == "present"
-    assert "PATH" in env
-
-
-def test_opencode_env_does_not_double_the_v1_suffix(monkeypatch):
-    """A base URL already ending in a slash must not produce '//v1'."""
-    monkeypatch.setattr(settings, "ollama_base_url", "http://ollama.local:11434/")
-    agent = _agent_with_model()
-
-    config = json.loads(agent._opencode_env()["OPENCODE_CONFIG_CONTENT"])
-
-    assert config["provider"]["ollama"]["options"]["baseURL"] == "http://ollama.local:11434/v1"
 
 
 def test_opencode_run_passes_the_generated_config(monkeypatch, tmp_path):

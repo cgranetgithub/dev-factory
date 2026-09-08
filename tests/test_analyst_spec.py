@@ -1,11 +1,7 @@
 """
-Tests for the analyst refusing to hand the pipeline an empty plan.
+Tests for the analyst: read the codebase, write a specification, publish it.
 
-Written from a real run: the analyst's output did not parse, the fallback
-produced a spec with no summary and no criteria, and the pipeline carried on. The
-developer received a task consisting of an issue title, and the scope gate — which
-compares the change against the declared files — checked nothing, because nothing
-was declared.
+OpenCode and GitHub are both stubbed — no subprocess, no network, no model.
 """
 
 from __future__ import annotations
@@ -14,7 +10,10 @@ import pytest
 
 from devfactory.agents.analyst import AnalystAgent, AnalystFailedError, _unusable_because
 from devfactory.context import GitHubIssue, PipelineContext, TaskSpec
-from devfactory.models.client import LLMResponse
+from devfactory.models.registry import ModelMeta
+from devfactory.opencode import OpenCodeResult
+
+_GOOD = '{"summary": "s", "acceptance_criteria": ["c"], "files_to_modify": ["a.py"]}'
 
 
 def _spec(summary="do the thing", criteria=("it works",)) -> TaskSpec:
@@ -29,6 +28,51 @@ def _spec(summary="do the thing", criteria=("it works",)) -> TaskSpec:
     )
 
 
+def _ctx() -> PipelineContext:
+    return PipelineContext(
+        issue=GitHubIssue(
+            number=1,
+            title="login breaks",
+            body="it breaks",
+            repo="o/r",
+            labels=[],
+            url="https://x/1",
+        )
+    )
+
+
+def _agent(monkeypatch, tmp_path, outputs: list[str]) -> tuple[AnalystAgent, dict]:
+    """An analyst whose OpenCode runs and GitHub publishing are recorded."""
+    from devfactory.agents import analyst as analyst_module
+    from devfactory.config import settings
+
+    monkeypatch.setattr(settings, "workspace", tmp_path)
+    (tmp_path / "r").mkdir(exist_ok=True)
+
+    agent = AnalystAgent()
+    agent._model = ModelMeta(name="gemma4:26b", parameters_b=26, context_k=32, roles=["analyst"])
+    monkeypatch.setattr(agent, "load_prompt", lambda *a, **k: "system")
+
+    seen: dict = {"prompts": [], "published": []}
+    it = iter(outputs)
+
+    def fake_run(prompt, **kwargs):
+        seen["prompts"].append(prompt)
+        seen["kwargs"] = kwargs
+        return OpenCodeResult(output=next(it), duration_ms=1000)
+
+    monkeypatch.setattr(analyst_module.opencode, "run", fake_run)
+    monkeypatch.setattr(
+        analyst_module,
+        "publish_spec",
+        lambda repo, number, title, spec: seen["published"].append((repo, number, title)) or 42,
+    )
+    return agent, seen
+
+
+# ── What makes a specification usable ────────────────────────────────────────
+
+
 def test_a_complete_spec_is_usable():
     assert _unusable_because(_spec()) is None
 
@@ -41,89 +85,68 @@ def test_no_acceptance_criteria_is_not_usable():
     assert _unusable_because(_spec(criteria=())) == "there are no acceptance criteria"
 
 
-def _agent(monkeypatch, replies: list[str]) -> AnalystAgent:
-    agent = AnalystAgent()
-    monkeypatch.setattr(agent, "load_prompt", lambda *a, **k: "system")
-    it = iter(replies)
-    monkeypatch.setattr(
-        agent,
-        "chat",
-        lambda *a, **k: LLMResponse(
-            content=next(it), model="m", prompt_tokens=0, completion_tokens=0, duration_ms=1
-        ),
-    )
-    return agent
+# ── Reading the codebase ─────────────────────────────────────────────────────
 
 
-def _ctx() -> PipelineContext:
-    return PipelineContext(
-        issue=GitHubIssue(number=1, title="t", body="b", repo="o/r", labels=[], url="https://x/1")
-    )
-
-
-_GOOD = '{"summary": "s", "acceptance_criteria": ["c"], "files_to_modify": ["a.py"]}'
-
-
-def test_a_usable_spec_is_accepted_on_the_first_try(monkeypatch):
-    agent = _agent(monkeypatch, [_GOOD])
-
-    ctx = agent.run(_ctx())
-
-    assert ctx.task_spec is not None
-    assert ctx.task_spec.acceptance_criteria == ["c"]
-
-
-def test_the_analyst_is_asked_again_after_an_unusable_answer(monkeypatch):
-    """The usual failure is a model wrapping its JSON in prose; one corrective
-    turn fixes it, and it costs a single cheap call."""
-    agent = _agent(monkeypatch, ["I think we should refactor the module.", _GOOD])
-
-    ctx = agent.run(_ctx())
-
-    assert ctx.task_spec is not None
-    assert ctx.task_spec.summary == "s"
-
-
-def test_a_run_stops_rather_than_proceeding_on_an_empty_plan(monkeypatch):
-    """Silently continuing wastes a full GPU run and disables the scope gate."""
-    agent = _agent(monkeypatch, ["nope", "still nope", "nope again"])
-
-    with pytest.raises(AnalystFailedError, match="could not produce a usable TaskSpec"):
-        agent.run(_ctx())
-
-
-def test_a_cut_off_answer_is_reported_as_cut_off(monkeypatch):
-    """Telling a model its JSON was unusable, when its JSON was simply never
-    written, sends it to fix the one thing that was not broken."""
-    agent = AnalystAgent()
-    monkeypatch.setattr(agent, "load_prompt", lambda *a, **k: "system")
-
-    sent: list = []
-    replies = iter(
-        [
-            LLMResponse(
-                content="",
-                model="m",
-                prompt_tokens=0,
-                completion_tokens=4096,
-                duration_ms=1,
-                truncated=True,
-                thinking_tokens_only=True,
-            ),
-            LLMResponse(
-                content=_GOOD, model="m", prompt_tokens=0, completion_tokens=10, duration_ms=1
-            ),
-        ]
-    )
-
-    def fake_chat(ctx, messages, **kwargs):
-        sent.append(messages)
-        return next(replies)
-
-    monkeypatch.setattr(agent, "chat", fake_chat)
+def test_the_analyst_reads_the_codebase_without_touching_it(monkeypatch, tmp_path):
+    """The whole point of the change: it works in the checkout, read-only."""
+    agent, seen = _agent(monkeypatch, tmp_path, [_GOOD])
 
     agent.run(_ctx())
 
-    correction = sent[1][-1]["content"]
-    assert "cut off" in correction
-    assert "do not think it through first" in correction
+    assert seen["kwargs"]["read_only"] is True
+    assert seen["kwargs"]["repo_path"] == tmp_path / "r"
+
+
+def test_the_prompt_tells_it_to_read_before_answering(monkeypatch, tmp_path):
+    """A model that answers from the issue text alone invents filenames — which is
+    what it did before it had the code."""
+    agent, seen = _agent(monkeypatch, tmp_path, [_GOOD])
+
+    agent.run(_ctx())
+
+    prompt = seen["prompts"][0]
+    assert "Read the code before" in prompt
+    assert "never ones you have not" in prompt
+
+
+# ── Publishing ───────────────────────────────────────────────────────────────
+
+
+def test_the_spec_is_published_and_the_context_points_at_it(monkeypatch, tmp_path):
+    agent, seen = _agent(monkeypatch, tmp_path, [_GOOD])
+
+    ctx = agent.run(_ctx())
+
+    assert seen["published"] == [("o/r", 1, "login breaks")]
+    assert ctx.spec_issue_number == 42
+
+
+def test_nothing_is_published_when_no_usable_spec_was_produced(monkeypatch, tmp_path):
+    """Publishing an empty specification would be worse than publishing none: the
+    developer would work from it."""
+    agent, seen = _agent(monkeypatch, tmp_path, ["nope", "still nope", "nope again"])
+
+    with pytest.raises(AnalystFailedError):
+        agent.run(_ctx())
+
+    assert seen["published"] == []
+
+
+# ── Retrying ─────────────────────────────────────────────────────────────────
+
+
+def test_an_unusable_answer_is_retried_with_the_reason(monkeypatch, tmp_path):
+    agent, seen = _agent(monkeypatch, tmp_path, ["I think we should refactor.", _GOOD])
+
+    ctx = agent.run(_ctx())
+
+    assert ctx.task_spec is not None
+    assert "no acceptance criteria" in seen["prompts"][1]
+
+
+def test_a_run_stops_rather_than_proceeding_on_an_empty_plan(monkeypatch, tmp_path):
+    agent, _ = _agent(monkeypatch, tmp_path, ["nope", "still nope", "nope again"])
+
+    with pytest.raises(AnalystFailedError, match="could not produce a usable specification"):
+        agent.run(_ctx())
