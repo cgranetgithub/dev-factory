@@ -2,7 +2,7 @@
 #
 # These skips MIRROR the flake8-bandit (`S...`) rules already ignored in
 # pyproject.toml [tool.ruff.lint], with the same justifications. The standalone
-# `bandit` tool run by the QA runner does not read ruff's config, so without
+# `bandit` tool run by the verification runner does not read ruff's config, so without
 # this file it re-flags issues the project has already reviewed and accepted,
 # failing QA on known false positives.
 #
