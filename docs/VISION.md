@@ -187,6 +187,19 @@ design and cannot change a ruleset.
 `devfactory controls check` rather than a hand-maintained baseline: a control statement
 that a human has to remember to update is not evidence.
 
+### Where the evidence will live
+
+The target architecture (`docs/ARCHITECTURE.md`) publishes the analyst's
+specification as a **linked GitHub issue** rather than passing it between stages in
+memory. That is a gain and a compromise, and the compromise belongs here rather than
+in a footnote: the specification becomes something a human can read, amend and cite,
+but it lives in GitHub rather than in git. An auditor can reach it, and it is not
+attached to a commit — weaker than a signed artifact in the repository.
+
+Adopting LangGraph brings **checkpointing**, which records every state transition of
+a run and survives a crash. That is most of what P1 asks for, obtained as a side
+effect rather than as a feature we build.
+
 ### Independent verification
 
 `.github/workflows/ci.yml` re-runs ruff, mypy, bandit and pytest on GitHub's
