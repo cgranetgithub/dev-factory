@@ -67,6 +67,9 @@ class PipelineContext:
 
     # Agent outputs
     task_spec: TaskSpec | None = None
+    # Where the specification was published. The spec issue is the artifact; this
+    # is only a pointer to it, so the pull request can cite it.
+    spec_issue_number: int | None = None
     verification_report: VerificationReport | None = None
     scope_report: Any | None = None  # verification.scope.ScopeReport
     review_results: list[ReviewResult] = field(default_factory=list)

@@ -90,6 +90,10 @@ def _build_pr_body(ctx: PipelineContext) -> str:
         "",
         f"Closes #{ctx.issue.number}",
         "",
+    ]
+    if ctx.spec_issue_number:
+        lines += [f"Built from the specification in #{ctx.spec_issue_number}.", ""]
+    lines += [
         "---",
         "",
         "### Summary",

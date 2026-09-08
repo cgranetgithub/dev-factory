@@ -8,8 +8,11 @@ import json
 import logging
 import re
 
+from devfactory import opencode
 from devfactory.agents.base import BaseAgent
+from devfactory.config import settings
 from devfactory.context import PipelineContext, TaskSpec
+from devfactory.github.spec_issue import publish_spec
 
 logger = logging.getLogger(__name__)
 
@@ -46,66 +49,81 @@ class AnalystAgent(BaseAgent):
     role = "analyst"
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
-        system = self.load_prompt()
-        user_content = f"""# GitHub Issue #{ctx.issue.number}: {ctx.issue.title}
+        """Read the codebase, write a specification, publish it as an issue.
 
-**Repository:** {ctx.issue.repo}
-
-## Description
-{ctx.issue.body}
-"""
-        messages = [
-            self.system_message(system),
-            self.user_message(user_content),
-        ]
+        The specification is not handed to the next stage. It is published where
+        anyone — the developer, the reviewer, a human — can read it.
+        """
+        repo_path = settings.workspace / ctx.repo_name
+        prompt = self._build_prompt(ctx)
 
         # An unusable spec is not a degraded run, it is a broken one: the developer
         # gets nothing but the issue title, and the scope gate — which compares the
         # change against the declared files — silently checks nothing, exactly when
         # it would be most useful. So the analyst is retried, and the run stops
         # rather than proceeding on an empty plan.
+        problem: str | None = "the analyst produced nothing"
         for attempt in range(1, _MAX_ATTEMPTS + 1):
-            response = self.chat(ctx, messages, temperature=0.1, max_tokens=_MAX_TOKENS)
-            spec = self._parse_task_spec(response.content)
-            problem = _unusable_because(spec)
+            result = opencode.run(
+                prompt,
+                repo_path=repo_path,
+                model_name=self.model.name,
+                read_only=True,
+                role=self.role,
+            )
+            ctx.log_execution(
+                agent=self.role,
+                model=self.model.name,
+                duration_ms=result.duration_ms,
+                prompt_tokens=0,
+                completion_tokens=0,
+            )
 
-            # A cut-off answer is not a wrong answer. Telling the model its JSON was
-            # unusable when it simply never reached the end sends it to fix the one
-            # thing that was not broken.
-            if problem and (response.truncated or response.thinking_tokens_only):
-                problem = (
-                    "the answer was cut off before it was finished — the token budget "
-                    "went on reasoning"
-                )
+            spec = self._parse_task_spec(result.output)
+            problem = _unusable_because(spec)
 
             if problem is None:
                 ctx.task_spec = spec
-                # The declared files are a gate input, not a hint: log them so a
-                # scope rejection can be read against what was actually asked for.
                 declared = spec.files_to_create + spec.files_to_modify
                 logger.info(
-                    f"[analyst] TaskSpec created: {len(spec.acceptance_criteria)} criteria, "
+                    f"[analyst] spec written: {len(spec.acceptance_criteria)} criteria, "
                     f"{len(declared)} file(s) declared: {', '.join(declared) or 'none'}"
+                )
+                ctx.spec_issue_number = publish_spec(
+                    ctx.issue.repo, ctx.issue.number, ctx.issue.title, spec
                 )
                 return ctx
 
             logger.warning(
-                f"[analyst] unusable TaskSpec on attempt {attempt}/{_MAX_ATTEMPTS}: {problem}"
+                f"[analyst] unusable spec on attempt {attempt}/{_MAX_ATTEMPTS}: {problem}"
             )
-            if attempt < _MAX_ATTEMPTS:
-                messages = messages + [
-                    {"role": "assistant", "content": response.content},
-                    self.user_message(
-                        f"That response is unusable: {problem}. Reply with the JSON object "
-                        f"only — no prose, no explanation, no reasoning, no markdown "
-                        f"outside the code block — and fill every field. Answer "
-                        f"immediately; do not think it through first."
-                    ),
-                ]
+            prompt = (
+                f"{self._build_prompt(ctx)}\n\n"
+                f"## A previous attempt failed\n"
+                f"It was unusable: {problem}. Read the code, then reply with the JSON "
+                f"object only — no prose, no explanation, no markdown outside the code "
+                f"block — and fill every field."
+            )
 
         raise AnalystFailedError(
-            f"The analyst could not produce a usable TaskSpec for issue "
+            f"The analyst could not produce a usable specification for issue "
             f"#{ctx.issue.number} in {_MAX_ATTEMPTS} attempts. Last problem: {problem}."
+        )
+
+    def _build_prompt(self, ctx: PipelineContext) -> str:
+        """The request, and the instruction to go and read before answering."""
+        return (
+            f"{self.load_prompt()}\n\n"
+            f"# Request: issue #{ctx.issue.number} — {ctx.issue.title}\n\n"
+            f"## What was asked\n{ctx.issue.body or '(no description given)'}\n\n"
+            f"## Your job\n"
+            f"You are in the repository this request is about. **Read the code before "
+            f"you answer.** Find the files that are actually involved, and name those — "
+            f"not the ones the request happens to mention, and never ones you have not "
+            f"opened.\n\n"
+            f"The request may be vague, or wrong about where the problem is. Your value "
+            f"is turning it into something a developer can implement without guessing.\n\n"
+            f"Do not modify anything. Reply with the JSON object only."
         )
 
     def _parse_task_spec(self, raw: str) -> TaskSpec:

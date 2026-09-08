@@ -13,13 +13,10 @@ Two backends, selected by ``settings.dev_backend``:
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 import re
-import subprocess
-import time
 
+from devfactory import opencode
 from devfactory.agents.base import BaseAgent
 from devfactory.config import settings
 from devfactory.context import PipelineContext
@@ -171,58 +168,13 @@ class DeveloperAgent(BaseAgent):
         selected Ollama model, editing files directly in the workspace repo.
         We only build the task prompt, invoke the CLI, and record the execution.
         """
-        repo_path = settings.workspace / ctx.repo_name
-        if not repo_path.exists():
-            raise RuntimeError(f"workspace path not found: {repo_path}")
-
-        prompt = self._build_opencode_prompt(ctx)
-        # OpenCode addresses models as "provider/model"; our provider id is "ollama".
-        model_ref = f"ollama/{self.model.name}"
-
-        cmd = [
-            settings.opencode_bin,
-            "run",
-            "--auto",  # auto-approve edits/commands — non-interactive
-            "--dir",
-            str(repo_path),
-            "-m",
-            model_ref,
-            "--print-logs",
-            "--log-level",
-            "INFO",
-            prompt,
-        ]
-        logger.info(f"[developer] opencode backend → {model_ref} in {repo_path}")
-
-        start = time.monotonic()
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=settings.opencode_timeout_s,
-                env=self._opencode_env(),
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(
-                f"opencode run timed out after {settings.opencode_timeout_s}s"
-            ) from exc
-        except FileNotFoundError as exc:
-            raise RuntimeError(
-                f"opencode binary not found at {settings.opencode_bin} — "
-                "install it or set OPENCODE_BIN"
-            ) from exc
-
-        duration_ms = int((time.monotonic() - start) * 1000)
-
-        if result.returncode != 0:
-            # Surface the tail of stderr so the failure is diagnosable in the logs.
-            logger.error(
-                f"[developer] opencode exited {result.returncode}: {result.stderr[-2000:]}"
-            )
-            raise RuntimeError(f"opencode run failed (exit {result.returncode})")
-
-        logger.info(f"[developer] opencode run complete in {duration_ms}ms")
+        result = opencode.run(
+            self._build_opencode_prompt(ctx),
+            repo_path=settings.workspace / ctx.repo_name,
+            model_name=self.model.name,
+            read_only=False,
+            role=self.role,
+        )
 
         # Record the execution in the KB. OpenCode does not report token counts
         # through this interface, so they are logged as 0 — developer scoring is
@@ -230,40 +182,11 @@ class DeveloperAgent(BaseAgent):
         ctx.log_execution(
             agent=self.role,
             model=self.model.name,
-            duration_ms=duration_ms,
+            duration_ms=result.duration_ms,
             prompt_tokens=0,
             completion_tokens=0,
         )
         return ctx
-
-    def _opencode_env(self) -> dict[str, str]:
-        """Environment for the CLI, carrying a provider config built from the registry.
-
-        OpenCode resolves "ollama/<model>" against its own configuration file, which
-        lives outside this project and lists models by hand. Anything the registry
-        declares but that file omits fails at run time with
-        "ProviderModelNotFoundError", after the analyst has already spent its time —
-        which is exactly what happened the first time a newly qualified model was
-        pinned as developer.
-
-        Passing the config inline through OPENCODE_CONFIG_CONTENT makes the registry
-        the single source of truth it claims to be, and removes a hand-maintained
-        file from the critical path.
-        """
-        config = {
-            "$schema": "https://opencode.ai/config.json",
-            "provider": {
-                "ollama": {
-                    "npm": "@ai-sdk/openai-compatible",
-                    "name": "Ollama (local)",
-                    # The OpenAI-compatible endpoint lives under /v1, while
-                    # ollama_base_url points at the server root.
-                    "options": {"baseURL": f"{settings.ollama_base_url.rstrip('/')}/v1"},
-                    "models": {self.model.name: {"name": self.model.name}},
-                }
-            },
-        }
-        return {**os.environ, "OPENCODE_CONFIG_CONTENT": json.dumps(config)}
 
     def _build_opencode_prompt(self, ctx: PipelineContext) -> str:
         """Build the task prompt for OpenCode (no file-block format — it edits itself)."""
