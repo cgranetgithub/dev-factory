@@ -2,7 +2,8 @@
 Tests for the developer agent.
 
 The harness is exercised with a mocked subprocess, so no real CLI or model is
-invoked — these assert the command line and the knowledge-base record.
+invoked — these assert the command line and the knowledge-base record. GitHub is
+stubbed at the spec issue: the developer reads its specification from there.
 """
 
 from __future__ import annotations
@@ -14,8 +15,39 @@ import pytest
 from devfactory.agents.developer import DeveloperAgent
 from devfactory.config import settings
 from devfactory.context import GitHubIssue, PipelineContext, TaskSpec
+from devfactory.github import spec_issue
 from devfactory.models.registry import ModelMeta
 from tests.test_opencode_runner import _FakePopen
+
+_SPEC = TaskSpec(
+    summary="Implement subtract(a, b).",
+    acceptance_criteria=["subtract(5, 3) == 2"],
+    files_to_create=["tests/test_calc.py"],
+    files_to_modify=["calc.py"],
+    test_strategy="pytest for add and subtract",
+    tech_notes="keep it minimal",
+)
+
+
+class _SpecIssueOnGitHub:
+    """The spec issue as GitHub holds it — a body a human can edit at any time."""
+
+    def __init__(self, spec: TaskSpec):
+        self.body = spec_issue._build_body(42, spec)
+
+    def get_repo(self, _name):
+        return self
+
+    def get_issue(self, number):
+        assert number == 7
+        return self
+
+
+@pytest.fixture(autouse=True)
+def spec_on_github(monkeypatch) -> _SpecIssueOnGitHub:
+    published = _SpecIssueOnGitHub(_SPEC)
+    monkeypatch.setattr(spec_issue, "gh", published)
+    return published
 
 
 def _make_ctx() -> PipelineContext:
@@ -28,15 +60,7 @@ def _make_ctx() -> PipelineContext:
         url="https://github.com/owner/repo/issues/42",
     )
     ctx = PipelineContext(issue=issue)
-    ctx.task_spec = TaskSpec(
-        summary="Implement subtract(a, b).",
-        acceptance_criteria=["subtract(5, 3) == 2"],
-        files_to_create=["tests/test_calc.py"],
-        files_to_modify=["calc.py"],
-        test_strategy="pytest for add and subtract",
-        tech_notes="keep it minimal",
-        raw="{}",
-    )
+    ctx.spec_issue_number = 7
     return ctx
 
 
@@ -77,8 +101,9 @@ def test_opencode_backend_invokes_cli_and_logs_execution(monkeypatch, tmp_path):
     assert "-m" in cmd and "ollama/qwen3-coder:30b" in cmd
     # Runs in the workspace repo directory.
     assert "--dir" in cmd and str(tmp_path / "repo") in cmd
-    # The task prompt (last arg) carries the issue title.
+    # The task prompt (last arg) carries the issue title and the published spec.
     assert "Add a subtract function" in cmd[-1]
+    assert "subtract(5, 3) == 2" in cmd[-1]
     # The timeouts are enforced by the watchdog around the process, not by a
     # keyword on the call — see devfactory.opencode._run_with_watchdog.
     assert captured["kwargs"]["env"]["OPENCODE_CONFIG_CONTENT"]
@@ -102,6 +127,33 @@ def test_opencode_backend_raises_on_nonzero_exit(monkeypatch, tmp_path):
     agent = _agent_with_model()
     with pytest.raises(RuntimeError, match="opencode run failed"):
         agent.run(_make_ctx())
+
+
+def test_amending_the_spec_issue_changes_what_the_developer_builds(
+    monkeypatch, tmp_path, spec_on_github
+):
+    """The issue is the specification. Nothing is copied from it when the analyst
+    runs, so an amendment made between two iterations reaches the next one."""
+    monkeypatch.setattr(settings, "workspace", tmp_path)
+    (tmp_path / "repo").mkdir()
+    prompts: list[str] = []
+
+    def fake_popen(cmd, **kwargs):
+        prompts.append(cmd[-1])
+        return _FakePopen(cmd, stdout="done")
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    agent = _agent_with_model()
+
+    agent.run(_make_ctx())
+    # A human edits the issue on GitHub between the two runs.
+    spec_on_github.body = spec_on_github.body.replace(
+        "subtract(5, 3) == 2", "subtract(5, 3) == 2 and subtract(0, 0) == 0"
+    )
+    agent.run(_make_ctx())
+
+    assert "subtract(0, 0) == 0" not in prompts[0]
+    assert "subtract(0, 0) == 0" in prompts[1]
 
 
 def test_opencode_run_passes_the_generated_config(monkeypatch, tmp_path):

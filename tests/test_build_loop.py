@@ -78,21 +78,26 @@ def pipeline(monkeypatch, tmp_path):
 
     p = Pipeline()
     p.developer = _Recorder([None], lambda ctx, _: None)
-    return p
-
-
-def _ctx() -> PipelineContext:
-    issue = GitHubIssue(number=1, title="t", body="b", repo="o/r", labels=[], url="https://x/1")
-    ctx = PipelineContext(issue=issue)
-    ctx.task_spec = TaskSpec(
+    # The specification the scope gate reads. It lives on the pipeline object here
+    # only so a test can declare files; in production it is fetched from the issue.
+    p.spec = TaskSpec(
         summary="s",
         acceptance_criteria=["c"],
         files_to_create=[],
         files_to_modify=[],
         test_strategy="",
         tech_notes="",
-        raw="{}",
     )
+    from devfactory.github import spec_issue
+
+    monkeypatch.setattr(spec_issue, "spec_for", lambda ctx: p.spec)
+    return p
+
+
+def _ctx() -> PipelineContext:
+    issue = GitHubIssue(number=1, title="t", body="b", repo="o/r", labels=[], url="https://x/1")
+    ctx = PipelineContext(issue=issue)
+    ctx.spec_issue_number = 42
     return ctx
 
 
@@ -191,14 +196,6 @@ def test_exhausted_budget_on_review_opens_the_pr_and_flags_it(pipeline, monkeypa
     assert ctx.review_rejections == 2
 
 
-def _spec_ctx(declared: list[str]) -> PipelineContext:
-    """A context whose task declares files, for the scope gate."""
-    ctx = _ctx()
-    assert ctx.task_spec is not None
-    ctx.task_spec.files_to_modify = declared
-    return ctx
-
-
 def test_scope_gate_sends_back_a_change_that_misses_a_declared_file(pipeline, monkeypatch):
     """The unwired-module case. The two expensive gates must never see it: the
     container costs a minute or two, the reviewer costs a model call, and the
@@ -206,11 +203,12 @@ def test_scope_gate_sends_back_a_change_that_misses_a_declared_file(pipeline, mo
     from devfactory.github import git_ops
 
     monkeypatch.setattr(git_ops, "files_changed_on_branch", lambda ctx: ["a.py"])
+    pipeline.spec.files_to_modify = ["a.py", "b.py"]
     pipeline.verification = _Recorder([True], _set_report)
     pipeline.reviewer = _Recorder(["approved"], _set_review)
 
     with pytest.raises(VerificationFailedError, match="does not cover what the task declared"):
-        pipeline._build_loop(_spec_ctx(["a.py", "b.py"]), task_id=1)
+        pipeline._build_loop(_ctx(), task_id=1)
 
     assert pipeline.developer.calls == 3, "the developer got its retries"
     assert pipeline.verification.calls == 0, "the container ran on a change the gate rejects"
@@ -221,10 +219,11 @@ def test_scope_gate_lets_a_complete_change_through(pipeline, monkeypatch):
     from devfactory.github import git_ops
 
     monkeypatch.setattr(git_ops, "files_changed_on_branch", lambda ctx: ["a.py", "b.py"])
+    pipeline.spec.files_to_modify = ["a.py", "b.py"]
     pipeline.verification = _Recorder([True], _set_report)
     pipeline.reviewer = _Recorder(["approved"], _set_review)
 
-    ctx = pipeline._build_loop(_spec_ctx(["a.py", "b.py"]), task_id=1)
+    ctx = pipeline._build_loop(_ctx(), task_id=1)
 
     assert ctx.scope_rejections == 0
     assert pipeline.verification.calls == 1
@@ -234,10 +233,11 @@ def test_extra_files_do_not_block_the_loop(pipeline, monkeypatch):
     from devfactory.github import git_ops
 
     monkeypatch.setattr(git_ops, "files_changed_on_branch", lambda ctx: ["a.py", "README.md"])
+    pipeline.spec.files_to_modify = ["a.py"]
     pipeline.verification = _Recorder([True], _set_report)
     pipeline.reviewer = _Recorder(["approved"], _set_review)
 
-    ctx = pipeline._build_loop(_spec_ctx(["a.py"]), task_id=1)
+    ctx = pipeline._build_loop(_ctx(), task_id=1)
 
     assert ctx.scope_rejections == 0
     assert ctx.scope_report.unexpected == ["README.md"]
@@ -251,11 +251,12 @@ def test_scope_gate_shares_the_retry_budget(pipeline, monkeypatch):
     monkeypatch.setattr(settings, "max_verification_retries", 2)
     monkeypatch.setattr(git_ops, "files_changed_on_branch", lambda ctx: [])
     monkeypatch.setattr(git_ops, "working_tree_has_changes", lambda ctx: True)
+    pipeline.spec.files_to_modify = ["a.py"]
     pipeline.verification = _Recorder([True], _set_report)
     pipeline.reviewer = _Recorder(["approved"], _set_review)
 
     with pytest.raises(VerificationFailedError, match="does not cover what the task declared"):
-        pipeline._build_loop(_spec_ctx(["a.py"]), task_id=1)
+        pipeline._build_loop(_ctx(), task_id=1)
 
 
 def test_an_iteration_that_produces_nothing_is_sent_back(pipeline, monkeypatch):

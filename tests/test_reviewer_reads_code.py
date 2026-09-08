@@ -21,18 +21,19 @@ from devfactory.opencode import OpenCodeResult
 _APPROVED = '{"verdict": "approved", "summary": "s", "score": 0.9, "inline_comments": []}'
 
 
+_SPEC = TaskSpec(
+    summary="s",
+    acceptance_criteria=["the accented password authenticates"],
+    files_to_create=[],
+    files_to_modify=["a.py"],
+    test_strategy="",
+    tech_notes="",
+)
+
+
 def _ctx() -> PipelineContext:
     ctx = PipelineContext(
         issue=GitHubIssue(number=1, title="t", body="b", repo="o/r", labels=[], url="https://x/1")
-    )
-    ctx.task_spec = TaskSpec(
-        summary="s",
-        acceptance_criteria=["c"],
-        files_to_create=[],
-        files_to_modify=["a.py"],
-        test_strategy="",
-        tech_notes="",
-        raw="{}",
     )
     ctx.spec_issue_number = 42
     ctx.diff = "diff --git a/a.py b/a.py"
@@ -44,6 +45,7 @@ def _agent(monkeypatch, tmp_path, output=_APPROVED, dirty=False):
     from devfactory.config import settings
 
     monkeypatch.setattr(settings, "workspace", tmp_path)
+    monkeypatch.setattr(reviewer_module.spec_issue, "spec_for", lambda ctx: _SPEC)
     (tmp_path / "r").mkdir(exist_ok=True)
 
     agent = ReviewerAgent()
@@ -100,6 +102,7 @@ def test_the_prompt_cites_the_specification_issue(monkeypatch, tmp_path):
     agent.run(_ctx())
 
     assert "#42" in seen["prompt"]
+    assert "the accented password authenticates" in seen["prompt"]
 
 
 def test_the_verdict_still_drives_the_loop(monkeypatch, tmp_path):

@@ -176,10 +176,19 @@ def test_build_user_prompt():
     issue = GitHubIssue(1, "Test Issue", "Test body", "owner/repo", [], "url")
     ctx = PipelineContext(issue=issue)
 
-    # Add some test data
-    ctx.task_spec = mock.MagicMock()
-    ctx.task_spec.summary = "Fix the bug"
-    ctx.task_spec.acceptance_criteria = ["Fix must work", "Code must be clean"]
+    # The specification is read from its issue; stub that read.
+    from devfactory.context import TaskSpec
+    from devfactory.github import spec_issue
+
+    ctx.spec_issue_number = 5
+    spec = TaskSpec(
+        summary="Fix the bug",
+        acceptance_criteria=["Fix must work", "Code must be clean"],
+        files_to_create=[],
+        files_to_modify=[],
+        test_strategy="",
+        tech_notes="",
+    )
 
     ctx.verification_report = mock.MagicMock()
     ctx.verification_report.summary = "All tests passed"
@@ -196,7 +205,8 @@ def test_build_user_prompt():
         " line3"
     )
 
-    prompt = agent._build_prompt(ctx)
+    with mock.patch.object(spec_issue, "spec_for", return_value=spec):
+        prompt = agent._build_prompt(ctx)
 
     # Should contain all expected parts
     assert "Code review: Test Issue" in prompt

@@ -1,12 +1,14 @@
 """
-Tests for publishing the specification as its own issue.
+Tests for the specification as its own issue: publishing it, and reading it back.
 
 PyGithub is stubbed; nothing reaches the network.
 """
 
 from __future__ import annotations
 
-from devfactory.context import TaskSpec
+import pytest
+
+from devfactory.context import GitHubIssue, PipelineContext, TaskSpec
 from devfactory.github import spec_issue
 
 
@@ -56,7 +58,6 @@ def _spec() -> TaskSpec:
         files_to_modify=["auth/login.py"],
         test_strategy="pytest",
         tech_notes="normalise to NFC",
-        raw="{}",
     )
 
 
@@ -119,3 +120,88 @@ def test_the_marker_survives_a_human_retitling_the_issue(monkeypatch):
     _install(monkeypatch, repo)
 
     assert spec_issue.publish_spec("o/r", 7, "a completely different title", _spec()) == 55
+
+
+# ── Reading it back ──────────────────────────────────────────────────────────
+
+
+def test_what_is_published_is_what_is_read_back():
+    """The body is the wire format between the analyst and everyone else, so the
+    round trip must be lossless for every field."""
+    spec = _spec()
+
+    assert spec_issue.parse_body(spec_issue._build_body(7, spec)) == spec
+
+
+def test_a_human_amendment_is_read_as_written():
+    body = "\n".join(
+        [
+            "<!-- devfactory:spec-for:7 -->",
+            "Implements #7",
+            "",
+            "## Summary",
+            "",
+            "Rewritten by a human, over two",
+            "lines.",
+            "",
+            "## Acceptance criteria",
+            "",
+            "- [x] one already ticked",
+            "- [ ] a criterion with `inline code` in it",
+            "* a star bullet",
+            "",
+            "## Files to modify",
+            "",
+            "- `auth/login.py`",
+            "- auth/session.py",
+            "",
+            "## Notes from the reviewer",
+            "",
+            "- not a criterion",
+        ]
+    )
+
+    spec = spec_issue.parse_body(body)
+
+    assert spec.summary == "Rewritten by a human, over two\nlines."
+    assert spec.acceptance_criteria == [
+        "one already ticked",
+        "a criterion with `inline code` in it",
+        "a star bullet",
+    ]
+    assert spec.files_to_modify == ["auth/login.py", "auth/session.py"]
+    # An unknown heading is ignored, not misfiled into the section before it.
+    assert spec.files_to_create == []
+
+
+def test_a_missing_section_is_empty_not_an_error():
+    spec = spec_issue.parse_body("## Summary\n\njust this")
+
+    assert spec.summary == "just this"
+    assert spec.acceptance_criteria == []
+    assert spec.tech_notes == ""
+
+
+def _ctx(spec_issue_number: int | None) -> PipelineContext:
+    ctx = PipelineContext(
+        issue=GitHubIssue(number=7, title="t", body="b", repo="o/r", labels=[], url="https://x/7")
+    )
+    ctx.spec_issue_number = spec_issue_number
+    return ctx
+
+
+def test_spec_for_reads_the_issue_the_context_points_at(monkeypatch):
+    class _Repo:
+        def get_issue(self, number):
+            assert number == 99
+            return _Issue(99, body=spec_issue._build_body(7, _spec()))
+
+    monkeypatch.setattr(spec_issue.gh, "get_repo", lambda _r: _Repo())
+
+    assert spec_issue.spec_for(_ctx(99)) == _spec()
+
+
+def test_spec_for_refuses_to_proceed_without_a_published_spec():
+    """A stage that went on without one would work from the issue title."""
+    with pytest.raises(spec_issue.SpecNotPublishedError, match="issue #7"):
+        spec_issue.spec_for(_ctx(None))

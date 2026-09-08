@@ -145,7 +145,10 @@ amended before the developer starts.
 
 ## What this changes
 
-| Today | Target |
+Every row below has landed (the last, the spec read back from its issue, on
+2026-09-08). The table stays as the record of the distance covered.
+
+| Before | Now |
 |---|---|
 | `PipelineContext` carries 17 fields between stages | Orchestration state only; content lives in issues and artifacts |
 | The analyst sees the issue text | The analyst reads the codebase |

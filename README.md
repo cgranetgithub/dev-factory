@@ -42,7 +42,7 @@ See [Vision & compliance](#vision--compliance).
 You (with Claude Opus)          DevFactory (local)
 ─────────────────────           ──────────────────────────────────────
 Create detailed GitHub Issue    Polls for label ready-for-dev
-Label it ready-for-dev    ───►  AnalystAgent   → structured TaskSpec
+Label it ready-for-dev    ───►  AnalystAgent   → spec, published as a linked issue
                                 DeveloperAgent → writes code (with repo context)
                                 autofix        → ruff --fix + format
                                 scope gate     → declared files actually touched?
@@ -60,8 +60,11 @@ You review & merge        ◄───  PR ready for your review
 
 2. **DevFactory picks it up** — The poller detects the issue and starts the pipeline.
 
-3. **Analyst reads the issue** — A local LLM produces a structured `TaskSpec`: files to
-   create/modify, acceptance criteria, test strategy, technical notes.
+3. **Analyst reads the issue and the codebase** — A local LLM writes a specification —
+   files to create/modify, acceptance criteria, test strategy, technical notes — and
+   publishes it as a linked GitHub issue (label `devfactory:spec`). Amend it there: the
+   developer and the reviewer read it from the issue each time they need it, not from
+   a copy taken when the analyst ran.
 
 4. **Developer writes the code** — Another local LLM generates the implementation.
    It reads the existing repo files to make context-aware changes, and is expected to
@@ -138,8 +141,8 @@ caught the error. Autonomy scales down as safety class scales up.
    Agent       Agent         Agent      Agent       (SQLite)
         │          │           │
         ▼          ▼           ▼
-   TaskSpec    file tree   Docker container
-   (JSON)      + git ops   ruff/mypy/bandit/pytest
+   spec issue  workspace   Docker container
+   on GitHub   + git ops   ruff/mypy/bandit/pytest
                                │
                     ┌──────────┴──────────┐
                     │   Model Router      │
@@ -349,7 +352,7 @@ Models below ~20B are deliberately not registered: they cost more retries than t
 
 | Role | Agent | Description |
 |---|---|---|
-| `analyst` | `AnalystAgent` | Parses issue → structured `TaskSpec` |
+| `analyst` | `AnalystAgent` | Reads the request and the codebase → publishes a spec issue |
 | `developer` | `DeveloperAgent` | Generates/modifies code |
 | `verification` | `VerificationAgent` | Runs ruff + mypy + bandit + pytest in Docker (no LLM call) |
 | `reviewer` | `ReviewerAgent` | Code review → inline GitHub PR comments |
@@ -394,8 +397,8 @@ devfactory/
 ├── devfactory/
 │   ├── agents/
 │   │   ├── base.py          # BaseAgent: model selection, prompt loading, LLM call
-│   │   ├── analyst.py       # Issue → TaskSpec (JSON)
-│   │   ├── developer.py     # TaskSpec → code files
+│   │   ├── analyst.py       # Request + codebase → spec issue
+│   │   ├── developer.py     # Spec issue → commits, via the harness
 │   │   ├── verification.py  # Orchestrates the Docker verification runner
 │   │   └── reviewer.py      # Diff + verification → inline GitHub review
 │   ├── verification/

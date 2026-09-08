@@ -82,7 +82,6 @@ class AnalystAgent(BaseAgent):
             problem = _unusable_because(spec)
 
             if problem is None:
-                ctx.task_spec = spec
                 declared = spec.files_to_create + spec.files_to_modify
                 logger.info(
                     f"[analyst] spec written: {len(spec.acceptance_criteria)} criteria, "
@@ -142,7 +141,6 @@ class AnalystAgent(BaseAgent):
                 files_to_modify=[],
                 test_strategy="",
                 tech_notes=raw,
-                raw=raw,
             )
 
         return TaskSpec(
@@ -152,5 +150,4 @@ class AnalystAgent(BaseAgent):
             files_to_modify=data.get("files_to_modify", []),
             test_strategy=data.get("test_strategy", ""),
             tech_notes=data.get("tech_notes", ""),
-            raw=raw,
         )

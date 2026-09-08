@@ -23,7 +23,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 
 from devfactory import graph
 from devfactory.context import GitHubIssue, PipelineContext
-from devfactory.github import issues
+from devfactory.github import issues, spec_issue
 from devfactory.kb.database import db
 from devfactory.kb.scorer import scorer
 from devfactory.verification.scope import ScopeReport
@@ -119,7 +119,17 @@ class Pipeline:
             db.update_task(task_id, branch_name=ctx.branch_name)
 
             # ── 2. Analyst ────────────────────────────────────────────────────
-            ctx = self.analyst.execute(ctx)
+            # A resumed run already has its specification, published on the way
+            # in. Running the analyst again would spend a model call to overwrite
+            # it — including whatever a human amended while the run was down.
+            existing = None
+            if self._thread_id:
+                existing = spec_issue.find_spec_issue(issue.repo, issue.number)
+            if existing is not None:
+                ctx.spec_issue_number = int(existing.number)
+                logger.info(f"[pipeline] resuming with spec issue #{existing.number}")
+            else:
+                ctx = self.analyst.execute(ctx)
 
             # ── 3. Developer → verification → review loop ─────────────────────
             ctx = self._build_loop(ctx, task_id)
@@ -279,8 +289,8 @@ class Pipeline:
         if not state["last_gate_passed"]:
             return state
 
-        spec = self._ctx.task_spec
-        declared = (spec.files_to_create + spec.files_to_modify) if spec else []
+        spec = spec_issue.spec_for(self._ctx)
+        declared = spec.files_to_create + spec.files_to_modify
         report = check_scope(declared, git_ops.files_changed_on_branch(self._ctx))
         self._ctx.scope_report = report
 

@@ -4,8 +4,9 @@ PipelineContext — one run's working state.
 One instance per issue. Under the autonomy rule this is orchestration state and a
 mirror of the graph's counters — not a channel between agents. What an agent
 produces is published (the spec as an issue, the code as commits, the review on
-the pull request); the fields below that still carry agent output are the last
-in-memory hand-off, tracked in #72.
+the pull request) and read back from there by whoever needs it. The gate reports
+below are the exception, by design: they are this iteration's feedback to the
+developer, and they are cited in the pull request that ends the run.
 """
 
 from __future__ import annotations
@@ -27,7 +28,11 @@ class GitHubIssue:
 
 @dataclass
 class TaskSpec:
-    """Structured output from the Analyst agent."""
+    """The specification, as the analyst wrote it and as the spec issue holds it.
+
+    Never kept on the context: it is published by the analyst and read back from
+    the issue by each stage that needs it (see ``github.spec_issue.spec_for``).
+    """
 
     summary: str
     acceptance_criteria: list[str]
@@ -35,7 +40,6 @@ class TaskSpec:
     files_to_modify: list[str]
     test_strategy: str
     tech_notes: str
-    raw: str  # original LLM output (for debugging)
 
 
 @dataclass
@@ -70,11 +74,10 @@ class PipelineContext:
     pr_number: int | None = None
     diff: str = ""  # branch vs base, refreshed before each review
 
-    # Agent outputs
-    task_spec: TaskSpec | None = None
     # Where the specification was published. The spec issue is the artifact; this
-    # is only a pointer to it, so the pull request can cite it.
+    # is the address every stage reads it from, and the pull request cites.
     spec_issue_number: int | None = None
+    # Gate reports — this iteration's feedback to the developer.
     verification_report: VerificationReport | None = None
     scope_report: Any | None = None  # verification.scope.ScopeReport
     review_results: list[ReviewResult] = field(default_factory=list)
