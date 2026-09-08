@@ -60,27 +60,28 @@ def test_router_no_candidates_raises():
         router.select("nonexistent_role")
 
 
-def test_router_require_agentic_loop_only_selects_drivers():
-    """With require_agentic_loop=True, every selection drives the agentic loop."""
+def test_router_only_ever_selects_agentic_drivers():
+    """Every agent reaches its model through the harness, so a model that answers
+    in prose must never be selected — for any role, without the caller asking.
+    That filter used to be opt-in, and the developer lost the flag in a refactor:
+    it could then draw a prose-only model one time in three."""
     router = ModelRouter(verify_availability=False)
-    # Sample repeatedly since selection is random — a non-driver must never slip
-    # through the filter.
-    for _ in range(30):
-        model = router.select("developer", require_agentic_loop=True)
-        assert model.drives_agentic_loop, f"{model.name} selected but drives no loop"
+    for role in ("analyst", "developer", "reviewer"):
+        for _ in range(30):
+            model = router.select(role)
+            assert model.drives_agentic_loop, f"{model.name} selected for {role}, drives no loop"
 
 
-def test_router_require_agentic_loop_excludes_prose_only_model():
-    """A developer model that only replies in prose is filtered out."""
-    devs = get_models_for_role("developer")
-    prose_only = [m for m in devs if not m.drives_agentic_loop]
+def test_router_never_selects_a_registered_prose_only_model():
+    """The prose-only models stay in the registry as recorded measurements."""
+    prose_only = [m for m in get_models_for_role("developer") if not m.drives_agentic_loop]
     if not prose_only:
         pytest.skip("No prose-only developer model in registry to exercise the filter")
 
     router = ModelRouter(verify_availability=False)
-    selected_names = {router.select("developer", require_agentic_loop=True).name for _ in range(30)}
+    selected = {router.select("developer").name for _ in range(30)}
     for m in prose_only:
-        assert m.name not in selected_names
+        assert m.name not in selected
 
 
 def test_excluding_every_driver_starves_the_pool():
@@ -91,7 +92,7 @@ def test_excluding_every_driver_starves_the_pool():
     router = ModelRouter(verify_availability=False)
 
     with pytest.raises(RuntimeError, match="No available models"):
-        router.select("developer", exclude=drivers, require_agentic_loop=True)
+        router.select("developer", exclude=drivers)
 
 
 def test_excluding_one_driver_still_leaves_another():
@@ -99,7 +100,7 @@ def test_excluding_one_driver_still_leaves_another():
     drivers = [m.name for m in get_models_for_role("developer") if m.drives_agentic_loop]
     router = ModelRouter(verify_availability=False)
 
-    picked = router.select("developer", exclude=[drivers[0]], require_agentic_loop=True)
+    picked = router.select("developer", exclude=[drivers[0]])
 
     assert picked.name != drivers[0]
     assert picked.drives_agentic_loop

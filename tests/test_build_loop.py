@@ -292,3 +292,24 @@ def test_the_developer_gets_another_attempt_after_producing_nothing(pipeline, mo
     assert pipeline.developer.calls == 2
     assert ctx.scope_rejections == 1
     assert pipeline.verification.calls == 1
+
+
+def test_the_developer_sees_the_counters_when_it_retries(pipeline, monkeypatch):
+    """The developer's prompt shows a gate's feedback only when that gate's
+    counter is above zero. The counters live in the graph state; if the context
+    only mirrored them at the end of the loop, every retry ran with them at zero
+    and the developer never saw why it had been sent back. That happened."""
+    seen: list[int] = []
+
+    class _Watching(_Recorder):
+        def execute(self, ctx):
+            seen.append(ctx.verification_attempts)
+            return super().execute(ctx)
+
+    pipeline.developer = _Watching([None], lambda ctx, _: None)
+    pipeline.verification = _Recorder([False, True], _set_report)
+    pipeline.reviewer = _Recorder(["approved"], _set_review)
+
+    pipeline._build_loop(_ctx(), task_id=1)
+
+    assert seen == [0, 1], "the second attempt must see the first refusal"
