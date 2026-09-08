@@ -31,12 +31,19 @@ concurrency:
 jobs:
   qa:
     runs-on: ubuntu-latest
+    # Every version the project claims to support, so the claim is a fact rather
+    # than an intention. `requires-python` and the classifiers in pyproject.toml
+    # must match this list — if a version has to be dropped here, drop the claim too.
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "${{ matrix.python-version }}"
           cache: pip
 
       - name: Install project and verification tools
@@ -61,6 +68,10 @@ jobs:
       - name: pytest
         run: pytest -q
 
+  # Single-version on purpose, unlike the job above: this exists to test the image
+  # the factory actually uses, and that image is pinned to 3.11 by
+  # docker/Dockerfile.test. A matrix here would test something the factory never runs.
+  #
   # The factory runs its gate inside docker/Dockerfile.test, which is a thinner
   # environment than this runner: it has no git binary until we install one, no
   # git identity, and only the tools the image declares. A test that passes in the
