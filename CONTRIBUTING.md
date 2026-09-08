@@ -32,7 +32,7 @@ uv pip install -e ".[dev]"
 cp .env.example .env
 # → edit .env with your GITHUB_TOKEN and GITHUB_USERNAME
 
-# Build the Docker test image (required for QA tests)
+# Build the Docker image the verification gate runs in
 docker build -f docker/Dockerfile.test -t devfactory-test:latest .
 
 # Pull at least one Ollama model
@@ -49,17 +49,17 @@ python -m pytest tests/ -v
 ```
 devfactory/
 ├── devfactory/
-│   ├── agents/          # Agent implementations (analyst, developer, qa, reviewer)
+│   ├── agents/          # Agent implementations (analyst, developer, verification, reviewer)
 │   ├── github/          # GitHub integration (poller, git operations, PR, reviews)
 │   ├── kb/              # Knowledge base: SQLite schema, scorer, dashboard
 │   ├── models/          # LLM client, model registry, router, retry logic
 │   ├── config.py        # Pydantic settings (reads from .env)
 │   ├── context.py       # PipelineContext — shared state passed between agents
-│   ├── orchestrator.py  # Sequential pipeline logic
+│   ├── orchestrator.py  # Pipeline stages and the graph nodes
 │   ├── logging_setup.py # Rich + JSON-lines logging
 │   └── cli.py           # Typer CLI commands
 ├── prompts/             # Markdown prompt templates (loaded at runtime)
-├── docker/              # Dockerfile for the isolated QA test environment
+├── docker/              # Dockerfile for the isolated verification environment
 └── tests/               # Pytest unit tests (no Ollama or GitHub required)
 ```
 
@@ -180,7 +180,7 @@ python -m pytest tests/ --cov=devfactory --cov-report=term-missing
 
 ## Areas where help is welcome
 
-- **New model integrations**: vLLM backend, OpenAI-compatible APIs, llama.cpp.
+- **A second harness**: Claude Code driving a local model, or Aider, beside OpenCode.
 - **New agent roles**: Security auditor, Documentation writer, Dependency updater.
 - **Parallel pipeline**: Concurrent agent execution for faster throughput.
 - **Web UI**: A simple dashboard to visualise the KB stats and pipeline runs.

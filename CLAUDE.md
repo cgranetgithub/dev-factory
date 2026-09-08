@@ -25,14 +25,16 @@ day-to-day work:
 ```
 devfactory/
 ├── devfactory/          # Main package
-│   ├── agents/          # Agent implementations (analyst, developer, qa, reviewer)
-│   ├── qa/              # Docker verification runner (ruff, mypy, bandit, pytest)
+│   ├── agents/          # Agent implementations (analyst, developer, verification, reviewer)
+│   ├── verification/    # Scope gate, ruff autofix, Docker runner (ruff/mypy/bandit/pytest)
 │   ├── github/          # GitHub integration (poller, git_ops, pr, review, issues)
 │   ├── kb/              # Knowledge base (SQLite, scorer, dashboard)
-│   ├── models/          # LLM client, router, registry, retry
+│   ├── models/          # Ollama client, router, registry, provisioning
 │   ├── config.py        # Settings (pydantic-settings, reads .env)
 │   ├── context.py       # PipelineContext — orchestration state (see ARCHITECTURE.md)
-│   ├── orchestrator.py  # Sequential pipeline runner
+│   ├── orchestrator.py  # Pipeline stages and the graph nodes
+│   ├── graph.py         # The developer → gates flow (LangGraph)
+│   ├── opencode.py      # The harness every agent runs through
 │   ├── logging_setup.py # Rich console + JSON-lines file logging
 │   └── cli.py           # Typer CLI entry point
 ├── prompts/             # Prompt templates (Markdown, loaded at runtime)
@@ -76,10 +78,17 @@ tests (not included yet) — unit tests mock those boundaries.
 
 1. Create `devfactory/agents/my_agent.py` inheriting from `BaseAgent`.
 2. Set `role = "my_role"` (must match a role in `models/registry.py`).
-3. Implement `run(ctx: PipelineContext) -> PipelineContext`.
+3. Implement `run(ctx: PipelineContext) -> PipelineContext`, reaching the model
+   through `opencode.run(...)` — every agent works in the checkout.
+   Pass `read_only=True` unless the agent's job is to change the code.
 4. Add the role to relevant `ModelMeta.roles` entries in `models/registry.py`.
+   Only models with `drives_agentic_loop=True` can hold an agentic role.
 5. Create `prompts/my_role.md`.
-6. Wire it into `orchestrator.py`.
+6. Wire it into `orchestrator.py`, and into `graph.py` if it is a gate.
+
+An agent must be able to do its job from the issue, the published artifacts and
+the codebase — see the autonomy rule above. If it needs something the previous
+stage held in memory, publish that thing instead of passing it.
 
 ## Adding a new model
 
@@ -105,25 +114,28 @@ This creates GitHub labels, builds the Docker test image, and checks Ollama.
 
 ```
 Poller detects label ready-for-dev
-  → mark_in_progress (label swap on GitHub)
   → Pipeline.run(issue)
-      1. AnalystAgent   → TaskSpec (JSON)
-      2. git_ops.setup_branch
-      3. loop (shared budget: DEVFACTORY_MAX_VERIFICATION_RETRIES iterations):
-           DeveloperAgent → writes files to workspace
-           autofix (ruff --fix + format on the touched files)
+      1. git_ops.setup_branch          — the analyst needs a checkout to read
+      2. AnalystAgent (OpenCode, read-only)
+           reads the request AND the codebase
+           publishes the spec as a linked issue, labelled devfactory:spec
+      3. graph (shared budget: DEVFACTORY_MAX_VERIFICATION_RETRIES iterations):
+           DeveloperAgent (OpenCode) → edits the workspace
+           autofix (ruff --fix + format, on the touched files only)
            git_ops.commit_changes
-           gate 1 — VerificationRunner (Docker) → VerificationReport
-             if it fails: back to the developer
-           gate 2 — ReviewerAgent → verdict on the diff vs the acceptance criteria
-             if changes_requested: back to the developer
-           both satisfied: break
+           gate 0 — scope        : did it touch the files the task declared?
+           gate 1 — verification : ruff, mypy, bandit, pytest, in Docker
+           gate 2 — review       : OpenCode read-only, judges against the spec
+           any gate can send the change back; all three share one budget
       4. git_ops.push_branch
-      5. create_or_update_pr
-      6. post the review that governed the accepted iteration onto the PR
+      5. create_or_update_pr           — cites the spec issue
+      6. post the review that governed the accepted iteration
       7. scorer.flush → SQLite KB
-  → mark_ready_for_review (issue comment + label)
+  → the pipeline applies the issue's status labels itself, whatever the outcome
 ```
+
+The flow is a LangGraph graph (`devfactory/graph.py`); the run is checkpointed, and
+`devfactory run --resume <thread-id>` continues an interrupted one.
 
 ## Style guide
 

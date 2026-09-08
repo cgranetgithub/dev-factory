@@ -33,6 +33,8 @@ venv.bak/
 
 # DevFactory runtime files
 devfactory.db
+# LangGraph's checkpoint store, written beside the knowledge base at run time.
+checkpoints.sqlite
 /logs/
 /tmp/
 

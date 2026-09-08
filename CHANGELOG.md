@@ -7,6 +7,14 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+**Documentation catch-up**
+- `CLAUDE.md` and `CONTRIBUTING.md` still described the pre-rename package (`qa/`, a `qa`
+  role) and a pipeline with two backends and no gates. Both now match the code
+- The pipeline-flow block shows the three gates, the shared budget, the spec issue and
+  the graph, so a debugging reader sees the real sequence
+- "Adding a new agent" says the two things a new agent must respect: it reaches its model
+  through the harness, and it must be able to work from published artifacts
+
 **One path, not two**
 - The single-shot developer backend is removed, with `repo_context.py`, the
   `DEVFACTORY_DEV_BACKEND` setting, `BaseAgent.chat()`, `LLMResponse` and the retry
