@@ -7,6 +7,16 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+**The reviewer reads the code**
+- It runs through OpenCode read-only in the repository, on the branch, instead of judging
+  a diff alone. It had approved three real defects, each invisible in the diff and obvious
+  one file away
+- It refuses to share the developer's model — an agent reviewing its own work is not a
+  review. `BaseAgent.avoid_models_from_roles` makes that a declared control rather than a
+  coincidence of the random draw
+- A reviewer that modified the working tree fails the run. OpenCode's `plan` agent forbids
+  it; this checks rather than trusts, because the failure would otherwise be silent
+
 **The analyst reads the code**
 - It runs through OpenCode read-only (`--agent plan`) with the checkout, instead of seeing
   only the issue text. It had been declaring filenames it had never opened

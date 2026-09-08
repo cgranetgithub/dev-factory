@@ -43,6 +43,9 @@ class BaseAgent(ABC):
     # each verification retry: excluding its previous model would starve a single-model pool
     # (e.g. the opencode backend, pinned to the one agentic-loop driver).
     avoid_repeated_model: bool = False
+    # Roles whose model this agent must not share. Set by the reviewer to keep it
+    # off the developer's model: an agent reviewing its own work is not a review.
+    avoid_models_from_roles: list[str] = []
 
     def requires_agentic_loop(self) -> bool:
         """Whether this agent needs a model that drives the opencode agentic loop.
@@ -71,10 +74,7 @@ class BaseAgent(ABC):
             # for THIS role in this run so the two passes differ. Off by default —
             # the developer re-executes on each verification retry and must be free to reuse
             # its model (its pool may hold a single eligible driver).
-            exclude = None
-            if self.avoid_repeated_model:
-                already_used = ctx.model_assignments.get(self.role)
-                exclude = [already_used] if already_used else None
+            exclude = self._models_to_avoid(ctx)
             self._model = self._forced_model or router.select(
                 role=self.role, exclude=exclude, require_agentic_loop=self.requires_agentic_loop()
             )
@@ -88,6 +88,26 @@ class BaseAgent(ABC):
 
         logger.info(f"[{self.role}] done")
         return updated_ctx
+
+    def _models_to_avoid(self, ctx: PipelineContext) -> list[str] | None:
+        """Models this agent must not be given, or None to leave the draw free.
+
+        Two different reasons, kept apart because they are different controls:
+        an agent may want a fresh perspective on its own previous attempt, and an
+        agent may need to differ from *another* role — a reviewer that shares the
+        developer's model is reviewing its own work, which is the separation of
+        duties we document as a control.
+        """
+        avoid = []
+        if self.avoid_repeated_model:
+            previous = ctx.model_assignments.get(self.role)
+            if previous:
+                avoid.append(previous)
+        for role in self.avoid_models_from_roles:
+            other = ctx.model_assignments.get(role)
+            if other:
+                avoid.append(other)
+        return avoid or None
 
     @abstractmethod
     def run(self, ctx: PipelineContext) -> PipelineContext:
