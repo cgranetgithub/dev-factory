@@ -206,8 +206,8 @@ set `OLLAMA_CONTEXT_LENGTH=32768` (or more) in the Ollama service environment.
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/devfactory.git
-cd devfactory
+git clone https://github.com/cgranetgithub/dev-factory.git
+cd dev-factory
 
 # Create a virtual environment with uv (recommended)
 uv venv .venv

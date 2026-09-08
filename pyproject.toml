@@ -45,8 +45,8 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/your-org/devfactory"
-Issues   = "https://github.com/your-org/devfactory/issues"
+Homepage = "https://github.com/cgranetgithub/dev-factory"
+Issues   = "https://github.com/cgranetgithub/dev-factory/issues"
 
 [project.scripts]
 devfactory = "devfactory.cli:app"
