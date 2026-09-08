@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import select
 import subprocess
 import time
 from dataclasses import dataclass
@@ -90,15 +91,7 @@ def run(
 
     start = time.monotonic()
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=settings.opencode_timeout_s,
-            env=_env(model_name),
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(f"opencode run timed out after {settings.opencode_timeout_s}s") from exc
+        result = _run_with_watchdog(cmd, _env(model_name), role)
     except FileNotFoundError as exc:
         raise RuntimeError(
             f"opencode binary not found at {settings.opencode_bin} — install it or set OPENCODE_BIN"
@@ -113,6 +106,78 @@ def run(
 
     logger.info(f"[{role}] opencode run complete in {duration_ms}ms")
     return OpenCodeResult(output=result.stdout, duration_ms=duration_ms)
+
+
+def _run_with_watchdog(
+    cmd: list[str], env: dict[str, str], role: str
+) -> subprocess.CompletedProcess[str]:
+    """Run the CLI, and give up early if it never starts working.
+
+    Observed twice: OpenCode initialises, logs its config, and then sits in its
+    event loop having sent nothing to the model — Ollama idle, GPU at zero, no
+    output. Under a single 30-minute timeout that costs half an hour of wall clock
+    before the pipeline learns anything.
+
+    So there are two deadlines. The startup one asks a narrow question: has the
+    process produced *any* output yet? A working run prints its banner within
+    seconds. The long one bounds the actual work, which legitimately takes minutes.
+
+    A run killed by the startup deadline raises like any other failure, so the loop
+    treats it as an attempt rather than swallowing it.
+    """
+    with subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env
+    ) as process:
+        try:
+            return _wait_for(process, role)
+        except BaseException:
+            # Never leave the CLI running: it holds the model and the next attempt
+            # would queue behind a process nobody is reading any more.
+            process.kill()
+            process.wait(timeout=10)
+            raise
+
+
+def _wait_for(process: subprocess.Popen[str], role: str) -> subprocess.CompletedProcess[str]:
+    deadline = settings.opencode_startup_timeout_s
+    try:
+        stdout, stderr = process.communicate(timeout=deadline)
+    except subprocess.TimeoutExpired:
+        pass
+    else:
+        return subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
+
+    # Still running after the startup deadline. That is normal for real work, and
+    # the way to tell the two apart is whether anything has been written yet.
+    if not _has_written_anything(process):
+        raise RuntimeError(
+            f"opencode produced no output in {deadline}s — it appears to have hung "
+            f"before reaching the model, so the run was abandoned rather than "
+            f"waiting for the {settings.opencode_timeout_s}s limit"
+        )
+
+    logger.info(f"[{role}] opencode is working — waiting up to {settings.opencode_timeout_s}s")
+    remaining = max(1, settings.opencode_timeout_s - deadline)
+    try:
+        stdout, stderr = process.communicate(timeout=remaining)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"opencode run timed out after {settings.opencode_timeout_s}s") from exc
+    return subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
+
+
+def _has_written_anything(process: subprocess.Popen[str]) -> bool:
+    """Whether the process has written to stdout or stderr yet.
+
+    Checked without reading, so the pipes stay intact for `communicate`: a
+    non-empty read buffer on either descriptor is enough to say it is alive.
+    """
+    for stream in (process.stdout, process.stderr):
+        if stream is None:
+            continue
+        ready, _, _ = select.select([stream], [], [], 0)
+        if ready:
+            return True
+    return False
 
 
 def _env(model_name: str) -> dict[str, str]:

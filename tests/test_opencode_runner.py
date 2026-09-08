@@ -17,17 +17,41 @@ from devfactory import opencode
 from devfactory.config import settings
 
 
+class _FakePopen:
+    """Stands in for the CLI process, with its output ready immediately."""
+
+    def __init__(self, args, stdout="", stderr="", returncode=0):
+        self.args = args
+        self.returncode = returncode
+        self._out = stdout
+        self._err = stderr
+        self.killed = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def communicate(self, timeout=None):
+        return self._out, self._err
+
+    def kill(self):
+        self.killed = True
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+
 def _capture(monkeypatch, returncode: int = 0, stdout: str = "ok") -> dict:
     captured: dict = {}
 
-    def fake_run(cmd, **kwargs):
+    def fake_popen(cmd, **kwargs):
         captured["cmd"] = cmd
         captured["kwargs"] = kwargs
-        return subprocess.CompletedProcess(
-            args=cmd, returncode=returncode, stdout=stdout, stderr=""
-        )
+        return _FakePopen(cmd, stdout=stdout, returncode=returncode)
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
     return captured
 
 
@@ -118,7 +142,7 @@ def test_a_missing_binary_says_what_to_do(monkeypatch, tmp_path):
     def boom(cmd, **kwargs):
         raise FileNotFoundError("no such binary")
 
-    monkeypatch.setattr(subprocess, "run", boom)
+    monkeypatch.setattr(subprocess, "Popen", boom)
 
     with pytest.raises(RuntimeError, match="install it or set OPENCODE_BIN"):
         _run(tmp_path)
@@ -138,3 +162,68 @@ def test_stdout_is_returned_for_the_caller_to_parse(monkeypatch, tmp_path):
     _capture(monkeypatch, stdout='```json\n{"a": 1}\n```')
 
     assert '"a": 1' in _run(tmp_path).output
+
+
+# ── The startup watchdog ─────────────────────────────────────────────────────
+
+
+class _HangingPopen(_FakePopen):
+    """A process that never produces anything, like the hang seen in two runs."""
+
+    def __init__(self, args, **kwargs):
+        super().__init__(args, **kwargs)
+        self.stdout = None
+        self.stderr = None
+        self.communicate_calls = 0
+
+    def communicate(self, timeout=None):
+        self.communicate_calls += 1
+        raise subprocess.TimeoutExpired(cmd=self.args, timeout=timeout or 0)
+
+
+def test_a_hung_run_is_abandoned_at_the_startup_deadline(monkeypatch, tmp_path):
+    """Twice, OpenCode initialised and then sat there — Ollama idle, nothing
+    written. Under the long timeout alone that costs half an hour to learn
+    nothing."""
+    monkeypatch.setattr(settings, "opencode_startup_timeout_s", 1)
+    hung = _HangingPopen(["opencode"])
+    monkeypatch.setattr(subprocess, "Popen", lambda cmd, **kw: hung)
+
+    with pytest.raises(RuntimeError, match="produced no output"):
+        _run(tmp_path)
+
+    assert hung.killed, "a hung CLI must not be left holding the model"
+
+
+def test_a_slow_but_working_run_is_allowed_to_finish(monkeypatch, tmp_path):
+    """Real work takes minutes. The startup deadline asks a narrower question —
+    has it written anything — so it must not cut off a run that has."""
+    monkeypatch.setattr(settings, "opencode_startup_timeout_s", 1)
+
+    class _Slow(_HangingPopen):
+        def communicate(self, timeout=None):
+            self.communicate_calls += 1
+            if self.communicate_calls == 1:
+                raise subprocess.TimeoutExpired(cmd=self.args, timeout=timeout or 0)
+            return "the answer", ""
+
+    slow = _Slow(["opencode"])
+    monkeypatch.setattr(subprocess, "Popen", lambda cmd, **kw: slow)
+    # It has written something, so it is working rather than hung.
+    monkeypatch.setattr("devfactory.opencode._has_written_anything", lambda p: True)
+
+    assert _run(tmp_path).output == "the answer"
+    assert not slow.killed
+
+
+def test_the_long_timeout_still_bounds_real_work(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "opencode_startup_timeout_s", 1)
+    monkeypatch.setattr(settings, "opencode_timeout_s", 2)
+    hung = _HangingPopen(["opencode"])
+    monkeypatch.setattr(subprocess, "Popen", lambda cmd, **kw: hung)
+    monkeypatch.setattr("devfactory.opencode._has_written_anything", lambda p: True)
+
+    with pytest.raises(RuntimeError, match="timed out after"):
+        _run(tmp_path)
+
+    assert hung.killed
