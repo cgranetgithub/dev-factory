@@ -17,6 +17,12 @@ logger = logging.getLogger(__name__)
 # corrective turn fixes, and a fourth call would cost more than it recovers.
 _MAX_ATTEMPTS = 3
 
+# Generous, because reasoning models spend this budget on their working before they
+# write a single character of the answer. At 4096 a run was observed producing 4096
+# tokens of reasoning and an empty answer: the whole budget went on thinking, and
+# the pipeline saw an empty spec with no idea why.
+_MAX_TOKENS = 8192
+
 
 class AnalystFailedError(RuntimeError):
     """Raised when the analyst cannot produce a spec the pipeline can act on."""
@@ -59,9 +65,18 @@ class AnalystAgent(BaseAgent):
         # it would be most useful. So the analyst is retried, and the run stops
         # rather than proceeding on an empty plan.
         for attempt in range(1, _MAX_ATTEMPTS + 1):
-            response = self.chat(ctx, messages, temperature=0.1, max_tokens=4096)
+            response = self.chat(ctx, messages, temperature=0.1, max_tokens=_MAX_TOKENS)
             spec = self._parse_task_spec(response.content)
             problem = _unusable_because(spec)
+
+            # A cut-off answer is not a wrong answer. Telling the model its JSON was
+            # unusable when it simply never reached the end sends it to fix the one
+            # thing that was not broken.
+            if problem and (response.truncated or response.thinking_tokens_only):
+                problem = (
+                    "the answer was cut off before it was finished — the token budget "
+                    "went on reasoning"
+                )
 
             if problem is None:
                 ctx.task_spec = spec
@@ -82,8 +97,9 @@ class AnalystAgent(BaseAgent):
                     {"role": "assistant", "content": response.content},
                     self.user_message(
                         f"That response is unusable: {problem}. Reply with the JSON object "
-                        f"only — no prose, no explanation, no markdown outside the code "
-                        f"block — and fill every field."
+                        f"only — no prose, no explanation, no reasoning, no markdown "
+                        f"outside the code block — and fill every field. Answer "
+                        f"immediately; do not think it through first."
                     ),
                 ]
 

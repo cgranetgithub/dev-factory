@@ -10,6 +10,7 @@ Retry behaviour is provided via the ``@with_retry`` decorator on ``chat()``.
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 
@@ -17,6 +18,8 @@ import httpx
 
 from devfactory.config import settings
 from devfactory.models.retry import with_retry
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -28,6 +31,15 @@ class LLMResponse:
     prompt_tokens: int
     completion_tokens: int
     duration_ms: int
+    # The generation stopped because it ran out of budget, not because the model
+    # had finished. Without this a truncated answer is indistinguishable from a bad
+    # one, and the caller retries the wrong thing.
+    truncated: bool = False
+    # Reasoning models return their working separately from their answer. When the
+    # budget is spent thinking, `content` comes back empty and this does not — which
+    # is the difference between "the model said nothing useful" and "the model never
+    # got to the answer".
+    thinking_tokens_only: bool = False
 
 
 class OllamaClient:
@@ -80,13 +92,34 @@ class OllamaClient:
         data = resp.json()
         elapsed_ms = int((time.monotonic() - start) * 1000)
 
+        message = data.get("message", {})
+        content = message.get("content", "")
+        # Reasoning models put their working in `thinking` and their answer in
+        # `content`. Both are drawn from the same num_predict budget, so a model
+        # that thinks too long returns nothing at all.
+        thinking = message.get("thinking", "")
+        truncated = data.get("done_reason") == "length"
+
+        if truncated:
+            logger.warning(
+                f"[ollama] {model} hit its token limit after "
+                f"{data.get('eval_count', 0)} token(s) — the answer is cut off"
+            )
+        if not content.strip() and thinking.strip():
+            logger.warning(
+                f"[ollama] {model} returned reasoning but no answer — "
+                f"the whole budget went on thinking"
+            )
+
         # Ollama reports token usage as prompt_eval_count / eval_count
         return LLMResponse(
-            content=data["message"]["content"],
+            content=content,
             model=model,
             prompt_tokens=data.get("prompt_eval_count", 0),
             completion_tokens=data.get("eval_count", 0),
             duration_ms=elapsed_ms,
+            truncated=truncated,
+            thinking_tokens_only=bool(not content.strip() and thinking.strip()),
         )
 
     def version(self) -> str:
