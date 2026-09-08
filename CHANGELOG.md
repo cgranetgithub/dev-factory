@@ -7,6 +7,20 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+**Harness and gates**
+- The OpenCode runner gains a **startup deadline**: a run that has written nothing after
+  120s has hung before reaching the model — observed twice — and is abandoned instead of
+  waiting out the 1800s limit. The hang is OpenCode's; this stops it costing half an hour
+- `END_NODE` is annotated `str`. mypy sees a different world in CI (project installed)
+  than in the verification container (bare image), and an untyped `END` made `main` fail
+  its own gate while CI stayed green
+- `checkpoints.sqlite` is removed from version control and ignored
+
+**CI**
+- The `qa` job runs a matrix of Python 3.11, 3.12 and 3.13 — every version the project
+  claims. `verification-image` stays single-version: it exists to test the image the
+  factory actually uses, which is pinned to 3.11
+
 **Documentation catch-up**
 - `CLAUDE.md` and `CONTRIBUTING.md` still described the pre-rename package (`qa/`, a `qa`
   role) and a pipeline with two backends and no gates. Both now match the code
