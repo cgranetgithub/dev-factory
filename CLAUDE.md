@@ -6,7 +6,8 @@ DevFactory is a local AI-powered software factory that processes GitHub issues t
 sequential SDLC pipeline: Analyst → Developer → Verification → Review → PR.
 It runs entirely on local LLMs served by Ollama.
 
-**Direction — read [`docs/VISION.md`](docs/VISION.md) before proposing architecture.**
+**Direction — read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for where the
+pipeline is going, and [`docs/VISION.md`](docs/VISION.md) for why.**
 The goal is not just automation: it is an issue → PR factory whose SDLC is precise enough
 to be audited (SOC 2 / ISO 27001 first, IEC 62304 / ISO 13485 next). Two consequences for
 day-to-day work:
@@ -30,7 +31,7 @@ devfactory/
 │   ├── kb/              # Knowledge base (SQLite, scorer, dashboard)
 │   ├── models/          # LLM client, router, registry, retry
 │   ├── config.py        # Settings (pydantic-settings, reads .env)
-│   ├── context.py       # PipelineContext dataclass — shared state between agents
+│   ├── context.py       # PipelineContext — orchestration state (see ARCHITECTURE.md)
 │   ├── orchestrator.py  # Sequential pipeline runner
 │   ├── repo_context.py  # Reads workspace repo files for developer context
 │   ├── logging_setup.py # Rich console + JSON-lines file logging
@@ -44,7 +45,16 @@ devfactory/
 
 - **Python 3.11+** with type hints everywhere. Use `from __future__ import annotations`.
 - **Pydantic v2** for data validation; `pydantic-settings` for config.
-- **No heavy frameworks**: no LangGraph, no CrewAI. The pipeline is plain Python.
+- **Never reinvent the wheel**: if a maintained package does what we need, use it.
+  This replaces the earlier rule forbidding orchestration frameworks, which was
+  written when the pipeline was a straight line. It now has cycles — the reviewer
+  sends the change back, verification and review run again — so LangGraph is being
+  adopted for the flow. See `docs/ARCHITECTURE.md`.
+- **Agents are autonomous**: an agent does not need to know what the previous one
+  did, only that it is its turn. Agents pass nothing to each other; their outputs
+  are stored where the next stage can find them (the issue, a linked spec issue,
+  the codebase). Do not add a field to a shared object to carry information
+  between stages.
 - **One singleton per subsystem**: `settings`, `ollama`, `router`, `db`, `scorer`, `gh`.
   Import the singleton, never instantiate manually (except in tests).
 - **Agents are injectable**: `BaseAgent.__init__` accepts an optional forced `ModelMeta`.
