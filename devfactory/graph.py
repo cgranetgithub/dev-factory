@@ -17,7 +17,7 @@ re-derived should not be persisted.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Literal, TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
@@ -25,6 +25,14 @@ if TYPE_CHECKING:
     from devfactory.orchestrator import Pipeline
 
 logger = logging.getLogger(__name__)
+
+# Annotated explicitly because mypy sees a different world in each place it runs:
+# CI installs the project, so `END` is typed; the verification container runs the
+# bare image, where langgraph is absent and `END` is Any. Returning Any from a
+# typed function trips no-any-return there and nowhere else — which is how `main`
+# came to fail its own gate while CI stayed green. Pinning the type keeps the two
+# in agreement whatever is installed.
+END_NODE: str = END
 
 # Node names, used as both graph labels and routing targets.
 DEVELOPER = "developer"
@@ -73,17 +81,17 @@ def build(pipeline: Pipeline, max_iterations: int):
     graph.add_conditional_edges(
         SCOPE,
         _router(pipeline, VERIFICATION, max_iterations),
-        {DEVELOPER: DEVELOPER, VERIFICATION: VERIFICATION, END: END},
+        {DEVELOPER: DEVELOPER, VERIFICATION: VERIFICATION, END_NODE: END_NODE},
     )
     graph.add_conditional_edges(
         VERIFICATION,
         _router(pipeline, REVIEW, max_iterations),
-        {DEVELOPER: DEVELOPER, REVIEW: REVIEW, END: END},
+        {DEVELOPER: DEVELOPER, REVIEW: REVIEW, END_NODE: END_NODE},
     )
     graph.add_conditional_edges(
         REVIEW,
-        _router(pipeline, END, max_iterations),
-        {DEVELOPER: DEVELOPER, END: END},
+        _router(pipeline, END_NODE, max_iterations),
+        {DEVELOPER: DEVELOPER, END_NODE: END_NODE},
     )
 
     return graph
@@ -97,7 +105,7 @@ def _router(pipeline: Pipeline, on_pass: str, max_iterations: int):
     different.
     """
 
-    def route(state: LoopState) -> Literal["developer"] | str:
+    def route(state: LoopState) -> str:
         if pipeline.last_gate_passed:
             return on_pass
 
@@ -106,7 +114,7 @@ def _router(pipeline: Pipeline, on_pass: str, max_iterations: int):
             # or opens the pull request with the gate unsatisfied — a verification
             # failure is fatal, an unconvinced reviewer is for a human to arbitrate.
             pipeline.on_budget_exhausted(state)
-            return END
+            return END_NODE
 
         return DEVELOPER
 

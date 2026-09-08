@@ -58,7 +58,7 @@ def test_the_budget_stops_the_loop():
     pipeline = _FakePipeline(passed=False)
     route = graph._router(pipeline, graph.VERIFICATION, max_iterations=3)
 
-    assert route(_state(verification=2, review=1)) == graph.END
+    assert route(_state(verification=2, review=1)) == graph.END_NODE
     assert pipeline.exhausted_with, "the pipeline must be told, so it can decide what that means"
 
 
@@ -92,3 +92,10 @@ def test_the_graph_has_the_four_nodes_and_compiles():
         graph.VERIFICATION,
         graph.REVIEW,
     }
+
+
+def test_the_end_marker_is_a_plain_string():
+    """It is annotated `str` on purpose. mypy sees a different world in each place
+    it runs — CI installs the project, the verification container does not — and an
+    untyped `END` made `main` fail its own gate while CI stayed green."""
+    assert isinstance(graph.END_NODE, str)
