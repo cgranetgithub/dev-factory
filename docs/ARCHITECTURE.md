@@ -65,6 +65,20 @@ Costs to accept: two issues per task — a `devfactory:spec` label and a filter 
 the list readable — and the artifact lives in GitHub rather than in git, which is
 weaker evidence than a commit for an auditor. Recorded in `docs/VISION.md`.
 
+## The harness is a seam
+
+Every agent reaches its model through one module, `devfactory/opencode.py`: an agent
+asks for a run with a prompt, a checkout, a model and a read-only flag. It does not
+know which CLI answers.
+
+That boundary is deliberate. OpenCode is today's implementation; Claude Code driving
+a local model, or Aider, may join it. Rebuilding a harness from scratch is a large
+piece of work that has nothing to do with what this project sells, so we will not.
+
+There is no plugin framework, and there should not be one until a second
+implementation exists — one does not justify an abstraction. The seam is kept clean
+so that widening it later is small.
+
 ## Everything runs through OpenCode
 
 Software work needs the code. An agent that only sees an issue is guessing, and we
@@ -139,4 +153,4 @@ amended before the developer starts.
 | The spec exists in RAM until the process exits | The spec is an issue anyone can read, amend and cite |
 | A crashed run is lost | A crashed run resumes from its last checkpoint |
 | `repo_context.py` hand-builds context for the developer | OpenCode does it |
-| The single-shot `ollama` backend | A legacy path, to keep as a documented fallback or remove |
+| The single-shot `ollama` backend | **Removed.** A developer-only fallback protects a step the run never reaches: the analyst needs the harness too |

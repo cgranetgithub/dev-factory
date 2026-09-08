@@ -52,7 +52,8 @@ class ModelMeta:
 #     Only two dedicated coders survive the 20B floor (qwen3-coder, devstral),
 #     so the third slot is filled by a strong DENSE general model. NOTE: neither
 #     of those two can drive the "opencode" agentic loop (see drives_agentic_loop);
-#     they serve as reviewers and as single-shot "ollama"-backend developers.
+#     they are registered for their roles but the router will not select them for
+#     one that needs the harness.
 #     The agentic drivers are qwen3-coder plus all three general models, so the
 #     coding/general split no longer decides who can develop: capability does.
 #     Two of the generalists (gemma4, glm-4.7-flash) therefore also carry the
