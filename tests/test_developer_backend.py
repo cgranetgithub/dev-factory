@@ -181,3 +181,20 @@ def test_opencode_run_passes_the_generated_config(monkeypatch, tmp_path):
     _agent_with_model().run(_make_ctx())
 
     assert "OPENCODE_CONFIG_CONTENT" in captured["env"]
+
+
+def test_an_agent_can_be_kept_off_another_roles_model():
+    """Separation of duties: the reviewer must not be handed the developer's model."""
+    from devfactory.agents.reviewer import ReviewerAgent
+
+    ctx = _make_ctx()
+    ctx.model_assignments["developer"] = "qwen3-coder:30b"
+
+    assert ReviewerAgent()._models_to_avoid(ctx) == ["qwen3-coder:30b"]
+
+
+def test_no_exclusion_when_the_other_role_has_not_run_yet():
+    """The reviewer can run before the developer in a re-review; nothing to avoid."""
+    from devfactory.agents.reviewer import ReviewerAgent
+
+    assert ReviewerAgent()._models_to_avoid(_make_ctx()) is None

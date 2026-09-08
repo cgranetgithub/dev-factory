@@ -196,10 +196,10 @@ def test_build_user_prompt():
         " line3"
     )
 
-    prompt = agent._build_user_prompt(ctx)
+    prompt = agent._build_prompt(ctx)
 
     # Should contain all expected parts
-    assert "Code Review: Test Issue" in prompt
+    assert "Code review: Test Issue" in prompt
     assert "Fix the bug" in prompt
     assert "Fix must work" in prompt
     assert "All tests passed" in prompt
