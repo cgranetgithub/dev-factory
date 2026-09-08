@@ -79,6 +79,10 @@ class Settings(BaseSettings):
         alias="OPENCODE_BIN",
     )
     opencode_timeout_s: int = Field(default=1800, alias="OPENCODE_TIMEOUT_S")
+    # A working run prints its banner within seconds. One that has written nothing
+    # after this has hung before reaching the model — observed twice — and waiting
+    # out the long timeout would cost half an hour to learn nothing.
+    opencode_startup_timeout_s: int = Field(default=120, alias="OPENCODE_STARTUP_TIMEOUT_S")
 
     # Docker
     docker_test_image: str = Field(default="devfactory-test:latest", alias="DOCKER_TEST_IMAGE")

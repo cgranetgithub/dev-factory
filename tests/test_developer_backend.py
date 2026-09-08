@@ -15,6 +15,7 @@ from devfactory.agents.developer import DeveloperAgent
 from devfactory.config import settings
 from devfactory.context import GitHubIssue, PipelineContext, TaskSpec
 from devfactory.models.registry import ModelMeta
+from tests.test_opencode_runner import _FakePopen
 
 
 def _make_ctx() -> PipelineContext:
@@ -58,12 +59,12 @@ def test_opencode_backend_invokes_cli_and_logs_execution(monkeypatch, tmp_path):
 
     captured = {}
 
-    def fake_run(cmd, **kwargs):
+    def fake_popen(cmd, **kwargs):
         captured["cmd"] = cmd
         captured["kwargs"] = kwargs
-        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="done", stderr="")
+        return _FakePopen(cmd, stdout="done")
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
 
     agent = _agent_with_model()
     ctx = agent.run(_make_ctx())
@@ -78,7 +79,9 @@ def test_opencode_backend_invokes_cli_and_logs_execution(monkeypatch, tmp_path):
     assert "--dir" in cmd and str(tmp_path / "repo") in cmd
     # The task prompt (last arg) carries the issue title.
     assert "Add a subtract function" in cmd[-1]
-    assert captured["kwargs"]["timeout"] == 123
+    # The timeouts are enforced by the watchdog around the process, not by a
+    # keyword on the call — see devfactory.opencode._run_with_watchdog.
+    assert captured["kwargs"]["env"]["OPENCODE_CONFIG_CONTENT"]
 
     # Exactly one developer execution recorded for the KB.
     dev_execs = [e for e in ctx.execution_log if e["agent"] == "developer"]
@@ -104,10 +107,10 @@ def test_opencode_backend_raises_on_nonzero_exit(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "workspace", tmp_path)
     (tmp_path / "repo").mkdir()
 
-    def fake_run(cmd, **kwargs):
-        return subprocess.CompletedProcess(args=cmd, returncode=1, stdout="", stderr="boom")
+    def fake_popen(cmd, **kwargs):
+        return _FakePopen(cmd, stderr="boom", returncode=1)
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
 
     agent = _agent_with_model()
     with pytest.raises(RuntimeError, match="opencode run failed"):
@@ -120,11 +123,11 @@ def test_opencode_run_passes_the_generated_config(monkeypatch, tmp_path):
     (tmp_path / "repo").mkdir()
     captured = {}
 
-    def fake_run(cmd, **kwargs):
+    def fake_popen(cmd, **kwargs):
         captured["env"] = kwargs.get("env")
-        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+        return _FakePopen(cmd)
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
     _agent_with_model().run(_make_ctx())
 
     assert "OPENCODE_CONFIG_CONTENT" in captured["env"]
