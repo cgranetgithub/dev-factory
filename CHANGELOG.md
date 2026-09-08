@@ -7,6 +7,17 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+**The flow is a graph**
+- The developer → gates loop is a LangGraph `StateGraph` with conditional edges. The
+  `while True` and its four near-identical rejection blocks are gone; every routing
+  decision is in one function
+- Runs are checkpointed to `checkpoints.sqlite`. A run that dies after a sixteen-minute
+  developer step resumes with `devfactory run --resume <thread-id>`, printed at the start
+  of every run. A fresh thread per run, not per issue — reusing the issue number would make
+  a deliberate re-run silently resume a half-finished one
+- The graph state holds orchestration only: the counters, and nothing an agent produced.
+  A resumed node re-reads the world rather than needing a serialised copy of it
+
 **The reviewer reads the code**
 - It runs through OpenCode read-only in the repository, on the branch, instead of judging
   a diff alone. It had approved three real defects, each invisible in the diff and obvious

@@ -24,12 +24,21 @@ _MODEL_OPTION = typer.Option(
 )
 
 
+_RESUME_OPTION = typer.Option(
+    "",
+    "--resume",
+    help="Continue an interrupted run from its last checkpoint. The thread id is "
+    "printed at the start of every run.",
+)
+
+
 @app.command()
 def run(
     issue: int = typer.Option(..., "--issue", "-i", help="GitHub issue number"),
     repo: str = typer.Option(..., "--repo", "-r", help="GitHub repo (owner/repo)"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
     model: list[str] = _MODEL_OPTION,
+    resume: str = _RESUME_OPTION,
 ):
     """Process a single GitHub issue through the full pipeline."""
     from devfactory.logging_setup import setup_logging
@@ -51,7 +60,7 @@ def run(
 
     gh_issue = fetch_issue(repo, issue)
     try:
-        pipeline = Pipeline(model_overrides=overrides)
+        pipeline = Pipeline(model_overrides=overrides, resume_thread=resume or None)
     except ValueError as e:
         console.print(f"[bold red]✗[/] {e}")
         raise typer.Exit(code=2) from e

@@ -15,14 +15,18 @@ Flow:
 from __future__ import annotations
 
 import logging
+import sqlite3
 from datetime import UTC, datetime
 
 from github import GithubException
+from langgraph.checkpoint.sqlite import SqliteSaver
 
+from devfactory import graph
 from devfactory.context import GitHubIssue, PipelineContext
 from devfactory.github import issues
 from devfactory.kb.database import db
 from devfactory.kb.scorer import scorer
+from devfactory.verification.scope import ScopeReport
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +40,11 @@ class VerificationFailedError(RuntimeError):
 
 
 class Pipeline:
-    def __init__(self, model_overrides: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        model_overrides: dict[str, str] | None = None,
+        resume_thread: str | None = None,
+    ) -> None:
         """
         Args:
             model_overrides: role → model name, pinning that role for the whole run
@@ -53,6 +61,9 @@ class Pipeline:
         from devfactory.agents.verification import VerificationAgent
 
         forced = self._resolve_overrides(model_overrides or {})
+        # Set to continue a run that was interrupted: the graph picks up from its
+        # last checkpoint instead of paying for the developer again.
+        self._thread_id = resume_thread
 
         self.analyst: AnalystAgent = AnalystAgent(forced.get("analyst"))
         self.developer: DeveloperAgent = DeveloperAgent(forced.get("developer"))
@@ -175,137 +186,175 @@ class Pipeline:
         logger.info(f"[pipeline] branch ready: {ctx.branch_name}")
 
     def _build_loop(self, ctx: PipelineContext, task_id: int) -> PipelineContext:
-        """Developer → verification → review, until both gates are satisfied.
+        """Run the developer → gates graph until every gate is satisfied.
 
-        Two gates, in this order on purpose. Verification is deterministic and takes
-        a couple of minutes; the review costs a model call. Sending code that does not
-        even pass its own tests to a reviewer spends the expensive resource on what the
-        cheap one already found — and the reviewer then wastes its judgement on
-        mechanics instead of on whether the change actually does what the issue asked.
-
-        Both gates draw on one shared budget of developer iterations, so a change
-        cannot ping-pong between them indefinitely.
+        The graph owns the flow (see :mod:`devfactory.graph`); this holds the
+        context the nodes work on and the two facts the routing needs.
         """
         from devfactory.config import settings
+
+        self._ctx = ctx
+        self._task_id = task_id
+        self._max_iterations = settings.max_verification_retries
+        self.last_gate_passed = False
+
+        compiled = graph.build(self, self._max_iterations).compile(
+            checkpointer=self._checkpointer()
+        )
+        # A fresh thread per run, not per issue. Reusing the issue number would
+        # make a deliberate re-run silently resume a half-finished one, which is a
+        # surprising way to lose an hour. Resuming is opt-in: the id is logged, and
+        # `devfactory run --resume <id>` continues that exact run.
+        thread_id = self._thread_id or f"issue-{ctx.issue.number}-{ctx.started_at:%Y%m%d-%H%M%S}"
+        logger.info(f"[pipeline] graph thread {thread_id} (resume with --resume {thread_id})")
+        config = {"configurable": {"thread_id": thread_id}}
+        final = compiled.invoke(graph.initial_state(), config)
+        self._record_counters(final)
+        return self._ctx
+
+    def _record_counters(self, state: graph.LoopState) -> None:
+        """Copy the graph's counters onto the context.
+
+        The graph owns them during the run — they are orchestration state and they
+        are what gets checkpointed. The context keeps a snapshot because the scorer
+        records `retry_count` from it and the pull request body reads it, and
+        because a run that ends badly should still say how many attempts it took.
+        """
+        self._ctx.verification_attempts = state["verification_attempts"]
+        self._ctx.review_rejections = state["review_rejections"]
+        self._ctx.scope_rejections = state["scope_rejections"]
+
+    @staticmethod
+    def _checkpointer():
+        """Persist the graph state beside the knowledge base.
+
+        A developer step has taken sixteen minutes; a run that dies after it should
+        not pay for it again. The checkpoint holds orchestration state only, so
+        resuming re-runs a node and lets it re-read the world.
+        """
+        from devfactory.config import settings
+
+        path = settings.db_path.parent / "checkpoints.sqlite"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(path), check_same_thread=False)
+        return SqliteSaver(conn)
+
+    # ── Graph nodes ──────────────────────────────────────────────────────────
+    # Each runs one stage and reports what it decided. Routing lives in
+    # devfactory.graph, so the flow can be read in one place.
+
+    def _iterations(self, state: graph.LoopState) -> int:
+        return graph._iterations_used(state)
+
+    def node_developer(self, state: graph.LoopState) -> graph.LoopState:
         from devfactory.github import git_ops
         from devfactory.github.git_ops import workspace_path
         from devfactory.verification.autofix import autofix
-        from devfactory.verification.scope import ScopeReport, check_scope
 
-        max_retries = settings.max_verification_retries
+        self._ctx = self.developer.execute(self._ctx)
 
-        while True:
-            ctx = self.developer.execute(ctx)
+        # Did this iteration produce anything at all? Checked before staging, so it
+        # answers for this iteration rather than for the branch.
+        if not git_ops.working_tree_has_changes(self._ctx):
+            self._ctx.scope_report = ScopeReport.nothing_produced()
+            logger.warning("[pipeline] Developer produced no changes")
+            self.last_gate_passed = False
+            return {**state, "scope_rejections": state["scope_rejections"] + 1}
 
-            # Did this iteration produce anything at all? Checked before staging,
-            # so it answers for this iteration rather than for the branch. An empty
-            # change would otherwise sail through: the container verifies a tree
-            # that is still green, and the reviewer reads an empty diff.
-            if not git_ops.working_tree_has_changes(ctx):
-                ctx.scope_report = ScopeReport.nothing_produced()
-                ctx.scope_rejections += 1
-                logger.warning(
-                    f"[pipeline] Developer produced no changes — "
-                    f"iteration {ctx.iterations_used}/{max_retries}"
-                )
-                if ctx.iterations_used >= max_retries:
-                    db.update_task(task_id, status="verification_failed")
-                    raise VerificationFailedError(
-                        f"After {max_retries} attempt(s) on issue #{ctx.issue.number}, "
-                        f"the developer has produced no changes at all."
-                    )
-                continue
+        # Clear the mechanical lint failures before the gates see them, so the
+        # budget is spent on real defects rather than on line length.
+        self._ctx.lint_left_behind.append(
+            autofix(workspace_path(self._ctx), git_ops.changed_python_files(self._ctx))
+        )
+        git_ops.commit_changes(self._ctx, attempt=self._iterations(state) + 1)
+        self.last_gate_passed = True
+        return state
 
-            # Clear the mechanical lint failures before the gate sees them, so the
-            # retry budget is spent on real defects rather than on line length. The
-            # return value is what the developer left behind, kept for scoring.
-            ctx.lint_left_behind.append(
-                autofix(workspace_path(ctx), git_ops.changed_python_files(ctx))
-            )
+    def node_scope(self, state: graph.LoopState) -> graph.LoopState:
+        from devfactory.github import git_ops
+        from devfactory.verification.scope import check_scope
 
-            git_ops.commit_changes(ctx, attempt=ctx.iterations_used + 1)
+        # The developer node already refused an empty change; nothing more to say.
+        if not self.last_gate_passed:
+            return state
 
-            # ── Gate 0: scope (a set comparison) ──────────────────────────────
-            # First because it is nearly free. The container costs a minute or two
-            # and the reviewer costs a model call; neither should queue behind a
-            # question answered by comparing two lists of paths.
-            spec = ctx.task_spec
-            declared = (spec.files_to_create + spec.files_to_modify) if spec else []
-            ctx.scope_report = check_scope(declared, git_ops.files_changed_on_branch(ctx))
+        spec = self._ctx.task_spec
+        declared = (spec.files_to_create + spec.files_to_modify) if spec else []
+        report = check_scope(declared, git_ops.files_changed_on_branch(self._ctx))
+        self._ctx.scope_report = report
 
-            if not ctx.scope_report.satisfied:
-                ctx.scope_rejections += 1
-                logger.warning(
-                    f"[pipeline] Declared files untouched: "
-                    f"{', '.join(ctx.scope_report.missing)} — "
-                    f"iteration {ctx.iterations_used}/{max_retries}"
-                )
-                if ctx.iterations_used >= max_retries:
-                    db.update_task(task_id, status="verification_failed")
-                    raise VerificationFailedError(
-                        f"After {max_retries} attempt(s) on issue #{ctx.issue.number}, "
-                        f"the change still does not touch the files the task declared:\n"
-                        f"{ctx.scope_report.summary()}"
-                    )
-                continue
-
-            if ctx.scope_report.unexpected:
-                # Not blocking: an analyst cannot foresee every file. Recorded so a
-                # model that edits unrelated files is visible in the run.
-                logger.warning(
-                    f"[pipeline] Files changed outside the task: "
-                    f"{', '.join(ctx.scope_report.unexpected)}"
-                )
-
-            # ── Gate 1: verification (deterministic) ──────────────────────────
-            ctx = self.verification.execute(ctx)
-            report = ctx.verification_report
-
-            if not (report and report.passed):
-                ctx.verification_attempts += 1
-                if ctx.iterations_used >= max_retries:
-                    db.update_task(task_id, status="verification_failed")
-                    raise VerificationFailedError(
-                        f"Verification failed after {max_retries} attempt(s) "
-                        f"on issue #{ctx.issue.number}.\n"
-                        f"Last report:\n{report.summary if report else 'N/A'}"
-                    )
-                logger.warning(
-                    f"[pipeline] Verification failed — "
-                    f"iteration {ctx.iterations_used}/{max_retries}"
-                )
-                continue
-
-            logger.info(f"[pipeline] Verification passed on iteration {ctx.iterations_used + 1}")
-
-            # ── Gate 2: review (judgement) ────────────────────────────────────
-            ctx.diff = self._get_diff(ctx)
-            ctx = self.reviewer.execute(ctx)
-            verdict = ctx.review_results[-1].verdict if ctx.review_results else "commented"
-
-            if verdict != "changes_requested":
-                logger.info(f"[pipeline] Review verdict={verdict} — proceeding to PR")
-                return ctx
-
-            ctx.review_rejections += 1
-
-            if ctx.iterations_used >= max_retries:
-                # The code passes verification; only the reviewer is unsatisfied.
-                # Blocking here would produce nothing at all, so the change goes to
-                # the PR with the unresolved review attached and the human decides.
-                # Recorded loudly rather than dropped: a gate that was not satisfied
-                # must remain visible in the evidence.
-                logger.warning(
-                    f"[pipeline] Review still requests changes after {max_retries} "
-                    f"iteration(s) — opening the PR with the review unresolved"
-                )
-                ctx.review_unresolved = True
-                return ctx
-
+        if report.unexpected:
+            # Not blocking: an analyst cannot foresee every file. Recorded so a
+            # model that edits unrelated files stays visible.
             logger.warning(
-                f"[pipeline] Review requested changes — "
-                f"iteration {ctx.iterations_used}/{max_retries}"
+                f"[pipeline] Files changed outside the task: {', '.join(report.unexpected)}"
             )
+
+        self.last_gate_passed = report.satisfied
+        if report.satisfied:
+            return state
+
+        logger.warning(f"[pipeline] Declared files untouched: {', '.join(report.missing)}")
+        return {**state, "scope_rejections": state["scope_rejections"] + 1}
+
+    def node_verification(self, state: graph.LoopState) -> graph.LoopState:
+        self._ctx = self.verification.execute(self._ctx)
+        report = self._ctx.verification_report
+        self.last_gate_passed = bool(report and report.passed)
+
+        if self.last_gate_passed:
+            logger.info("[pipeline] Verification passed")
+            return state
+
+        return {**state, "verification_attempts": state["verification_attempts"] + 1}
+
+    def node_review(self, state: graph.LoopState) -> graph.LoopState:
+        self._ctx.diff = self._get_diff(self._ctx)
+        self._ctx = self.reviewer.execute(self._ctx)
+        verdict = self._ctx.review_results[-1].verdict if self._ctx.review_results else "commented"
+
+        # Only changes_requested sends the change back; a suggestion is not a block.
+        self.last_gate_passed = verdict != "changes_requested"
+        if self.last_gate_passed:
+            logger.info(f"[pipeline] Review verdict={verdict} — proceeding to PR")
+            return state
+
+        return {**state, "review_rejections": state["review_rejections"] + 1}
+
+    def on_budget_exhausted(self, state: graph.LoopState) -> None:
+        """Called when a gate refused for the last time.
+
+        A verification failure ends the run: the code does not work. An
+        unconvinced reviewer does not, because the code *does* work and blocking
+        would produce nothing at all — the pull request opens with the gate
+        recorded as unsatisfied, and a human arbitrates.
+        """
+        # Snapshot before raising: a failed run should still record its attempts.
+        self._record_counters(state)
+
+        report = self._ctx.verification_report
+        if report is not None and not report.passed:
+            db.update_task(self._task_id, status="verification_failed")
+            raise VerificationFailedError(
+                f"Verification failed after {self._max_iterations} attempt(s) "
+                f"on issue #{self._ctx.issue.number}.\n"
+                f"Last report:\n{report.summary}"
+            )
+
+        scope = self._ctx.scope_report
+        if scope is not None and not scope.satisfied:
+            db.update_task(self._task_id, status="verification_failed")
+            raise VerificationFailedError(
+                f"After {self._max_iterations} attempt(s) on issue "
+                f"#{self._ctx.issue.number}, the change still does not cover what "
+                f"the task declared:\n{scope.summary()}"
+            )
+
+        logger.warning(
+            f"[pipeline] Review still requests changes after {self._max_iterations} "
+            f"iteration(s) — opening the PR with the review unresolved"
+        )
+        self._ctx.review_unresolved = True
 
     def _push_branch(self, ctx: PipelineContext):
         from devfactory.github import git_ops

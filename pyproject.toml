@@ -24,6 +24,10 @@ dependencies = [
     "httpx>=0.27",
     "PyGithub>=2.3",
     "gitpython>=3.1",
+    # The developer → gates flow is cyclic, so it is a graph rather than a loop
+    # written by hand. The checkpointer lets an interrupted run resume.
+    "langgraph>=1.2",
+    "langgraph-checkpoint-sqlite>=3.1",
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
     "rich>=13.7",

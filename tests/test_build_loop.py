@@ -209,7 +209,7 @@ def test_scope_gate_sends_back_a_change_that_misses_a_declared_file(pipeline, mo
     pipeline.verification = _Recorder([True], _set_report)
     pipeline.reviewer = _Recorder(["approved"], _set_review)
 
-    with pytest.raises(VerificationFailedError, match="does not touch the files"):
+    with pytest.raises(VerificationFailedError, match="does not cover what the task declared"):
         pipeline._build_loop(_spec_ctx(["a.py", "b.py"]), task_id=1)
 
     assert pipeline.developer.calls == 3, "the developer got its retries"
@@ -254,7 +254,7 @@ def test_scope_gate_shares_the_retry_budget(pipeline, monkeypatch):
     pipeline.verification = _Recorder([True], _set_report)
     pipeline.reviewer = _Recorder(["approved"], _set_review)
 
-    with pytest.raises(VerificationFailedError, match="does not touch the files"):
+    with pytest.raises(VerificationFailedError, match="does not cover what the task declared"):
         pipeline._build_loop(_spec_ctx(["a.py"]), task_id=1)
 
 
@@ -270,7 +270,7 @@ def test_an_iteration_that_produces_nothing_is_sent_back(pipeline, monkeypatch):
     pipeline.verification = _Recorder([True], _set_report)
     pipeline.reviewer = _Recorder(["approved"], _set_review)
 
-    with pytest.raises(VerificationFailedError, match="produced no changes"):
+    with pytest.raises(VerificationFailedError, match="changed no files at all"):
         pipeline._build_loop(_ctx(), task_id=1)
 
     assert pipeline.verification.calls == 0
