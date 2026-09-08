@@ -1,45 +1,21 @@
 """
 Ollama API client wrapper.
 
-Provides a thin, swappable interface over the Ollama ``/api/chat`` endpoint.
-The ``OllamaClient`` class can be replaced with any OpenAI-compatible backend
-(e.g. vLLM) by implementing the same ``chat()`` / ``list_models()`` interface.
-
-Retry behaviour is provided via the ``@with_retry`` decorator on ``chat()``.
+Model *inference* does not go through here: every agent drives a model through the
+harness (:mod:`devfactory.opencode`), which talks to Ollama itself. What is left is
+the management surface the pipeline needs — which models exist, which are pulled,
+and what version of the server is answering.
 """
 
 from __future__ import annotations
 
 import logging
-import time
-from dataclasses import dataclass
 
 import httpx
 
 from devfactory.config import settings
-from devfactory.models.retry import with_retry
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class LLMResponse:
-    """Structured response from a single LLM chat call."""
-
-    content: str
-    model: str
-    prompt_tokens: int
-    completion_tokens: int
-    duration_ms: int
-    # The generation stopped because it ran out of budget, not because the model
-    # had finished. Without this a truncated answer is indistinguishable from a bad
-    # one, and the caller retries the wrong thing.
-    truncated: bool = False
-    # Reasoning models return their working separately from their answer. When the
-    # budget is spent thinking, `content` comes back empty and this does not — which
-    # is the difference between "the model said nothing useful" and "the model never
-    # got to the answer".
-    thinking_tokens_only: bool = False
 
 
 class OllamaClient:
@@ -47,80 +23,6 @@ class OllamaClient:
 
     def __init__(self, base_url: str | None = None):
         self.base_url = (base_url or settings.ollama_base_url).rstrip("/")
-
-    @with_retry(max_attempts=3, delay=10.0)
-    def chat(
-        self,
-        model: str,
-        messages: list[dict],
-        temperature: float = 0.2,
-        max_tokens: int = 8192,
-    ) -> LLMResponse:
-        """
-        Send a chat request to Ollama and return a structured response.
-
-        Args:
-            model:       Ollama model name (e.g. ``qwen2.5-coder:14b``).
-            messages:    OpenAI-style message list (role / content dicts).
-            temperature: Sampling temperature (lower = more deterministic).
-            max_tokens:  Maximum tokens to generate.
-
-        Returns:
-            :class:`LLMResponse` with content and token counts.
-
-        Raises:
-            httpx.HTTPStatusError: On non-2xx response.
-            RuntimeError:          After all retry attempts are exhausted.
-        """
-        timeout = settings.ollama_timeout_s
-        start = time.monotonic()
-        with httpx.Client(timeout=timeout) as client:
-            resp = client.post(
-                f"{self.base_url}/api/chat",
-                json={
-                    "model": model,
-                    "messages": messages,
-                    "stream": False,
-                    "options": {
-                        "temperature": temperature,
-                        "num_predict": max_tokens,
-                    },
-                },
-            )
-            resp.raise_for_status()
-
-        data = resp.json()
-        elapsed_ms = int((time.monotonic() - start) * 1000)
-
-        message = data.get("message", {})
-        content = message.get("content", "")
-        # Reasoning models put their working in `thinking` and their answer in
-        # `content`. Both are drawn from the same num_predict budget, so a model
-        # that thinks too long returns nothing at all.
-        thinking = message.get("thinking", "")
-        truncated = data.get("done_reason") == "length"
-
-        if truncated:
-            logger.warning(
-                f"[ollama] {model} hit its token limit after "
-                f"{data.get('eval_count', 0)} token(s) — the answer is cut off"
-            )
-        if not content.strip() and thinking.strip():
-            logger.warning(
-                f"[ollama] {model} returned reasoning but no answer — "
-                f"the whole budget went on thinking"
-            )
-
-        # Ollama reports token usage as prompt_eval_count / eval_count
-        return LLMResponse(
-            content=content,
-            model=model,
-            prompt_tokens=data.get("prompt_eval_count", 0),
-            completion_tokens=data.get("eval_count", 0),
-            duration_ms=elapsed_ms,
-            truncated=truncated,
-            thinking_tokens_only=bool(not content.strip() and thinking.strip()),
-        )
 
     def version(self) -> str:
         """Return the running Ollama server version (e.g. "0.33.3")."""

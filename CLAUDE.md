@@ -33,7 +33,6 @@ devfactory/
 │   ├── config.py        # Settings (pydantic-settings, reads .env)
 │   ├── context.py       # PipelineContext — orchestration state (see ARCHITECTURE.md)
 │   ├── orchestrator.py  # Sequential pipeline runner
-│   ├── repo_context.py  # Reads workspace repo files for developer context
 │   ├── logging_setup.py # Rich console + JSON-lines file logging
 │   └── cli.py           # Typer CLI entry point
 ├── prompts/             # Prompt templates (Markdown, loaded at runtime)

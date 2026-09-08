@@ -56,7 +56,6 @@ devfactory/
 │   ├── config.py        # Pydantic settings (reads from .env)
 │   ├── context.py       # PipelineContext — shared state passed between agents
 │   ├── orchestrator.py  # Sequential pipeline logic
-│   ├── repo_context.py  # Reads workspace files to inject into developer prompts
 │   ├── logging_setup.py # Rich + JSON-lines logging
 │   └── cli.py           # Typer CLI commands
 ├── prompts/             # Markdown prompt templates (loaded at runtime)

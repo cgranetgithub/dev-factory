@@ -1,8 +1,8 @@
 """
-Tests for the developer backend dispatch (ollama vs opencode).
+Tests for the developer agent.
 
-The opencode path is exercised with a mocked subprocess so no real CLI or model
-is invoked — we assert the command line and the KB execution record.
+The harness is exercised with a mocked subprocess, so no real CLI or model is
+invoked — these assert the command line and the knowledge-base record.
 """
 
 from __future__ import annotations
@@ -48,51 +48,11 @@ def _agent_with_model() -> DeveloperAgent:
     return agent
 
 
-def _patch_backends(monkeypatch, agent) -> dict:
-    """Replace both backend methods with recorders; return the dict they write to."""
-    called: dict = {}
-
-    def record_opencode(ctx):
-        called["opencode"] = True
-        return ctx
-
-    def record_ollama(ctx):
-        called["ollama"] = True
-        return ctx
-
-    monkeypatch.setattr(agent, "_run_opencode", record_opencode)
-    monkeypatch.setattr(agent, "_run_ollama", record_ollama)
-    return called
-
-
-def test_run_dispatches_to_opencode_backend(monkeypatch):
-    """With dev_backend='opencode', run() calls the opencode path, not the ollama one."""
-    monkeypatch.setattr(settings, "dev_backend", "opencode")
-    agent = _agent_with_model()
-    called = _patch_backends(monkeypatch, agent)
-
-    agent.run(_make_ctx())
-
-    assert called == {"opencode": True}
-
-
-def test_run_dispatches_to_ollama_backend_by_default(monkeypatch):
-    """With the default dev_backend='ollama', run() calls the single-shot path."""
-    monkeypatch.setattr(settings, "dev_backend", "ollama")
-    agent = _agent_with_model()
-    called = _patch_backends(monkeypatch, agent)
-
-    agent.run(_make_ctx())
-
-    assert called == {"ollama": True}
-
-
 def test_opencode_backend_invokes_cli_and_logs_execution(monkeypatch, tmp_path):
     """_run_opencode builds the expected command and records a developer execution."""
     # The workspace repo must exist (repo_name == "repo").
     monkeypatch.setattr(settings, "workspace", tmp_path)
     (tmp_path / "repo").mkdir()
-    monkeypatch.setattr(settings, "dev_backend", "opencode")
     monkeypatch.setattr(settings, "opencode_bin", "/fake/opencode")
     monkeypatch.setattr(settings, "opencode_timeout_s", 123)
 
@@ -126,17 +86,6 @@ def test_opencode_backend_invokes_cli_and_logs_execution(monkeypatch, tmp_path):
     assert dev_execs[0]["model"] == "qwen3-coder:30b"
 
 
-def test_requires_agentic_loop_tracks_backend(monkeypatch):
-    """The developer demands an agentic-loop driver only for the opencode backend."""
-    agent = DeveloperAgent()
-
-    monkeypatch.setattr(settings, "dev_backend", "opencode")
-    assert agent.requires_agentic_loop() is True
-
-    monkeypatch.setattr(settings, "dev_backend", "ollama")
-    assert agent.requires_agentic_loop() is False
-
-
 def test_no_agent_avoids_its_previous_model():
     """Both agents re-run inside the loop, on successive versions of the same change.
 
@@ -154,7 +103,6 @@ def test_opencode_backend_raises_on_nonzero_exit(monkeypatch, tmp_path):
     """A failed opencode run raises RuntimeError so the pipeline can react."""
     monkeypatch.setattr(settings, "workspace", tmp_path)
     (tmp_path / "repo").mkdir()
-    monkeypatch.setattr(settings, "dev_backend", "opencode")
 
     def fake_run(cmd, **kwargs):
         return subprocess.CompletedProcess(args=cmd, returncode=1, stdout="", stderr="boom")
@@ -170,7 +118,6 @@ def test_opencode_run_passes_the_generated_config(monkeypatch, tmp_path):
     """The config must actually reach the subprocess, not just be built."""
     monkeypatch.setattr(settings, "workspace", tmp_path)
     (tmp_path / "repo").mkdir()
-    monkeypatch.setattr(settings, "dev_backend", "opencode")
     captured = {}
 
     def fake_run(cmd, **kwargs):

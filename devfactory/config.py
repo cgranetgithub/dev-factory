@@ -30,15 +30,8 @@ class Settings(BaseSettings):
         DEVFACTORY_WORKSPACE       Directory where repositories are cloned.
         DEVFACTORY_MAX_VERIFICATION_RETRIES  Max developer→verification loop iterations per issue.
         DEVFACTORY_LOG_LEVEL       Logging verbosity (DEBUG / INFO / WARNING).
-        DEVFACTORY_DEV_BACKEND     How the developer role writes code:
-                                     "ollama"   — single-shot LLM call, full-file
-                                                  rewrites parsed from the response
-                                                  (default, self-contained);
-                                     "opencode" — delegate to the OpenCode CLI, an
-                                                  agentic tool loop that edits files
-                                                  in place against a local Ollama model.
 
-    OpenCode (only used when DEVFACTORY_DEV_BACKEND=opencode):
+    OpenCode — the harness every agent runs through:
         OPENCODE_BIN        Path to the opencode binary (default: ~/.opencode/bin/opencode).
         OPENCODE_TIMEOUT_S  Seconds before an opencode run is killed (default: 1800).
 
@@ -78,10 +71,7 @@ class Settings(BaseSettings):
     max_verification_retries: int = Field(default=3, alias="DEVFACTORY_MAX_VERIFICATION_RETRIES")
     log_level: str = Field(default="INFO", alias="DEVFACTORY_LOG_LEVEL")
 
-    # Developer backend: "ollama" (single-shot, default) or "opencode" (agentic CLI).
-    dev_backend: str = Field(default="ollama", alias="DEVFACTORY_DEV_BACKEND")
-
-    # OpenCode CLI (only used when dev_backend == "opencode"). The binary lives in
+    # OpenCode CLI — the harness. The binary lives in
     # the user's home by default (installed via the standalone installer). Runs can
     # be long — the agentic loop makes many model calls — hence a wide timeout.
     opencode_bin: str = Field(

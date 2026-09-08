@@ -7,6 +7,17 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+**One path, not two**
+- The single-shot developer backend is removed, with `repo_context.py`, the
+  `DEVFACTORY_DEV_BACKEND` setting, `BaseAgent.chat()`, `LLMResponse` and the retry
+  decorator — 775 lines. It existed because the agentic loop appeared not to work, which
+  was a measurement error (#33), and a developer-only fallback cannot help when the
+  analyst and the reviewer need the harness too
+- `OllamaClient` keeps the management surface the pipeline uses — `version`,
+  `list_models`, `pull_model`. Inference goes through the harness now
+- OpenCode moves from optional to required in the prerequisites, which is what it has
+  actually been since the analyst started reading the codebase
+
 **The flow is a graph**
 - The developer → gates loop is a LangGraph `StateGraph` with conditional edges. The
   `while True` and its four near-identical rejection blocks are gone; every routing

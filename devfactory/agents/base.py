@@ -10,7 +10,6 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 
 from devfactory.context import PipelineContext
-from devfactory.models.client import LLMResponse, ollama
 from devfactory.models.registry import ModelMeta
 from devfactory.models.router import router
 
@@ -129,33 +128,6 @@ class BaseAgent(ABC):
         if not path.exists():
             raise FileNotFoundError(f"Prompt file not found: {path}")
         return path.read_text(encoding="utf-8")
-
-    def chat(
-        self,
-        ctx: PipelineContext,
-        messages: list[dict],
-        temperature: float = 0.2,
-        max_tokens: int = 8192,
-    ) -> LLMResponse:
-        """Call the LLM and record the execution in context."""
-        response = ollama.chat(
-            model=self.model.name,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-        ctx.log_execution(
-            agent=self.role,
-            model=self.model.name,
-            duration_ms=response.duration_ms,
-            prompt_tokens=response.prompt_tokens,
-            completion_tokens=response.completion_tokens,
-        )
-        logger.debug(
-            f"[{self.role}] tokens: {response.prompt_tokens}→{response.completion_tokens} "
-            f"in {response.duration_ms}ms"
-        )
-        return response
 
     def system_message(self, content: str) -> dict:
         return {"role": "system", "content": content}

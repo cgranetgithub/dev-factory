@@ -174,18 +174,11 @@ Two constraints narrow the random draw:
   the developer must keep the model that has the context (and its pool has a single
   agentic driver), and rotating the reviewer would move the verdict for reasons
   unrelated to the code. Diversity comes from the random draw *across* runs.
-- **Agentic-loop capability** — with the `opencode` developer backend the model has to
-  actually drive a tool-calling loop. Ollama's `tools` capability flag is necessary but
+- **Agentic-loop capability** — every agent runs through the harness, so its model has
+  to actually drive a tool-calling loop. Ollama's `tools` capability flag is necessary but
   **not** sufficient: several tool-capable models simply answer in prose and edit nothing.
   Only models verified to drive the loop carry `drives_agentic_loop=True` in the registry,
   and the developer requires that flag when the backend is `opencode`.
-
-### Developer backends
-
-| Backend | How it works | When to use |
-|---|---|---|
-| `ollama` *(default)* | Single-shot LLM call; the model returns whole files, DevFactory writes them | Simple, single-file changes |
-| `opencode` | Drives the [OpenCode](https://opencode.ai) CLI in `--auto` mode against a local Ollama model; the model reads, greps and edits files itself | Multi-file, context-dependent changes |
 
 The `opencode` backend needs a large context window on the Ollama side —
 set `OLLAMA_CONTEXT_LENGTH=32768` (or more) in the Ollama service environment.
@@ -201,7 +194,7 @@ set `OLLAMA_CONTEXT_LENGTH=32768` (or more) in the Ollama service environment.
 | Ollama | latest | Running locally, at least one model pulled |
 | GitHub | — | Personal access token with `repo` + `pull_request` scopes |
 | GPU | recommended | RTX 3090 24 GB VRAM or equivalent — the registry targets 20–30B models |
-| OpenCode | optional | Only for the `opencode` developer backend |
+| OpenCode | **required** | The harness every agent runs through |
 
 ---
 
@@ -250,8 +243,7 @@ cp .env.example .env
 | `DEVFACTORY_WORKSPACE` | `/tmp/devfactory` | Directory where repos are cloned |
 | `DEVFACTORY_MAX_VERIFICATION_RETRIES` | `3` | Max Developer → verification loop iterations |
 | `DEVFACTORY_LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` |
-| `DEVFACTORY_DEV_BACKEND` | `ollama` | Developer backend: `ollama` (single-shot) or `opencode` (agentic CLI) |
-| `OPENCODE_BIN` | `~/.opencode/bin/opencode` | OpenCode CLI path — used only by the `opencode` backend |
+| `OPENCODE_BIN` | `~/.opencode/bin/opencode` | OpenCode CLI path — the harness every agent runs through |
 | `OPENCODE_TIMEOUT_S` | `1800` | Seconds before an OpenCode run is killed |
 | `DOCKER_TEST_IMAGE` | `devfactory-test:latest` | Name of the pre-built verification image |
 
@@ -429,7 +421,6 @@ devfactory/
 │   ├── config.py            # Pydantic settings
 │   ├── context.py           # PipelineContext dataclass
 │   ├── orchestrator.py      # Sequential pipeline logic
-│   ├── repo_context.py      # Workspace file reader for developer context
 │   ├── logging_setup.py     # Rich + JSON-lines logging
 │   └── cli.py               # Typer CLI
 ├── prompts/
