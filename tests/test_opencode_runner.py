@@ -181,6 +181,24 @@ class _HangingPopen(_FakePopen):
         raise subprocess.TimeoutExpired(cmd=self.args, timeout=timeout or 0)
 
 
+class _Launches:
+    """A ``Popen`` stand-in handing out one scripted process per launch.
+
+    The retry means a single call can start the CLI twice, so a test has to be able
+    to say what the *second* launch does — and to count how many there were.
+    """
+
+    def __init__(self, *processes):
+        self._queue = list(processes)
+        self.started: list[_FakePopen] = []
+
+    def __call__(self, cmd, **kwargs):
+        process = self._queue.pop(0)
+        process.args = cmd
+        self.started.append(process)
+        return process
+
+
 def test_a_hung_run_is_abandoned_at_the_startup_deadline(monkeypatch, tmp_path):
     """Twice, OpenCode initialised and then sat there — Ollama idle, nothing
     written. Under the long timeout alone that costs half an hour to learn
@@ -193,6 +211,51 @@ def test_a_hung_run_is_abandoned_at_the_startup_deadline(monkeypatch, tmp_path):
         _run(tmp_path)
 
     assert hung.killed, "a hung CLI must not be left holding the model"
+
+
+def test_a_startup_hang_is_retried_once_and_then_works(monkeypatch, tmp_path, caplog):
+    """The hang is the harness, not the work: the process never reached the model,
+    so it never touched the checkout and starting it again is free. Losing a whole
+    pipeline run to it — as happened on issue #4 — is not."""
+    monkeypatch.setattr(settings, "opencode_startup_timeout_s", 1)
+    hung = _HangingPopen(["opencode"])
+    launches = _Launches(hung, _FakePopen(["opencode"], stdout="the answer"))
+    monkeypatch.setattr(subprocess, "Popen", launches)
+
+    assert _run(tmp_path).output == "the answer"
+
+    assert len(launches.started) == 2, "the hung launch must be replaced by a second one"
+    assert hung.killed, "the hung CLI must be killed before the retry starts"
+    assert "restarting once" in caplog.text
+
+
+def test_two_startup_hangs_in_a_row_give_up(monkeypatch, tmp_path):
+    """Twice in a row is a broken host, not a hiccup — the retry must not become a
+    loop that never reports anything."""
+    monkeypatch.setattr(settings, "opencode_startup_timeout_s", 1)
+    launches = _Launches(_HangingPopen(["opencode"]), _HangingPopen(["opencode"]))
+    monkeypatch.setattr(subprocess, "Popen", launches)
+
+    with pytest.raises(RuntimeError, match="produced no output"):
+        _run(tmp_path)
+
+    assert len(launches.started) == 2, "exactly one retry, not an unbounded one"
+    assert all(p.killed for p in launches.started)
+
+
+def test_the_long_timeout_is_not_retried(monkeypatch, tmp_path):
+    """A run that hit the long timeout had started working. Re-running it would
+    spend the same half hour again for the same answer."""
+    monkeypatch.setattr(settings, "opencode_startup_timeout_s", 1)
+    monkeypatch.setattr(settings, "opencode_timeout_s", 2)
+    launches = _Launches(_HangingPopen(["opencode"]))
+    monkeypatch.setattr(subprocess, "Popen", launches)
+    monkeypatch.setattr("devfactory.opencode._has_written_anything", lambda p: True)
+
+    with pytest.raises(RuntimeError, match="timed out after"):
+        _run(tmp_path)
+
+    assert len(launches.started) == 1
 
 
 def test_a_slow_but_working_run_is_allowed_to_finish(monkeypatch, tmp_path):

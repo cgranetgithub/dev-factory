@@ -108,13 +108,22 @@ def run(
     return OpenCodeResult(output=result.stdout, duration_ms=duration_ms)
 
 
+class _StartupHangError(RuntimeError):
+    """OpenCode produced nothing at all before the startup deadline.
+
+    A subclass rather than a flag so the retry can tell this apart from every other
+    failure without inspecting a message. It is still a ``RuntimeError``, so a
+    caller that only knows about the documented failure type is unaffected.
+    """
+
+
 def _run_with_watchdog(
     cmd: list[str], env: dict[str, str], role: str
 ) -> subprocess.CompletedProcess[str]:
-    """Run the CLI, and give up early if it never starts working.
+    """Run the CLI, give up early if it never starts working, and relaunch once.
 
-    Observed twice: OpenCode initialises, logs its config, and then sits in its
-    event loop having sent nothing to the model — Ollama idle, GPU at zero, no
+    Observed three times: OpenCode initialises, logs its config, and then sits in
+    its event loop having sent nothing to the model — Ollama idle, GPU at zero, no
     output. Under a single 30-minute timeout that costs half an hour of wall clock
     before the pipeline learns anything.
 
@@ -122,9 +131,24 @@ def _run_with_watchdog(
     process produced *any* output yet? A working run prints its banner within
     seconds. The long one bounds the actual work, which legitimately takes minutes.
 
-    A run killed by the startup deadline raises like any other failure, so the loop
-    treats it as an attempt rather than swallowing it.
+    The startup hang is transient and it is the harness, not the work: a process
+    that never reached the model also never touched the checkout, so starting it
+    again costs a few seconds and changes nothing else. It is retried exactly once —
+    twice in a row is a broken host, not a hiccup, and the second failure raises so
+    the pipeline stops instead of looping on it. A run that hit the *long* timeout
+    is not retried: that one had started working, and re-running it would spend the
+    same half hour again.
     """
+    try:
+        return _launch(cmd, env, role)
+    except _StartupHangError:
+        logger.warning(f"[{role}] opencode hung before reaching the model — restarting once")
+
+    return _launch(cmd, env, role)
+
+
+def _launch(cmd: list[str], env: dict[str, str], role: str) -> subprocess.CompletedProcess[str]:
+    """Start the CLI once and wait on it under both deadlines."""
     with subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env
     ) as process:
@@ -150,7 +174,7 @@ def _wait_for(process: subprocess.Popen[str], role: str) -> subprocess.Completed
     # Still running after the startup deadline. That is normal for real work, and
     # the way to tell the two apart is whether anything has been written yet.
     if not _has_written_anything(process):
-        raise RuntimeError(
+        raise _StartupHangError(
             f"opencode produced no output in {deadline}s — it appears to have hung "
             f"before reaching the model, so the run was abandoned rather than "
             f"waiting for the {settings.opencode_timeout_s}s limit"
