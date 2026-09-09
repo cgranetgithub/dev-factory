@@ -51,7 +51,6 @@ def _agent(monkeypatch, tmp_path, output=_APPROVED, dirty=False):
         name="glm-4.7-flash:latest", parameters_b=32, context_k=32, roles=["reviewer"]
     )
     monkeypatch.setattr(agent, "load_prompt", lambda *a, **k: "system")
-    monkeypatch.setattr(agent, "_post_github_review", lambda *a, **k: None)
 
     seen: dict = {}
 
@@ -115,7 +114,3 @@ def test_the_verdict_still_drives_the_loop(monkeypatch, tmp_path):
 def test_the_reviewer_avoids_the_developers_model():
     """An agent reviewing its own work is not a review."""
     assert ReviewerAgent.avoid_models_from_roles == ["developer"]
-
-
-def test_the_reviewer_needs_a_model_that_can_explore():
-    assert ReviewerAgent().requires_agentic_loop() is True

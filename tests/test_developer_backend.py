@@ -89,19 +89,6 @@ def test_opencode_backend_invokes_cli_and_logs_execution(monkeypatch, tmp_path):
     assert dev_execs[0]["model"] == "qwen3-coder:30b"
 
 
-def test_no_agent_avoids_its_previous_model():
-    """Both agents re-run inside the loop, on successive versions of the same change.
-
-    Excluding the model used last time would starve the developer's single-driver
-    pool, and would hand the reviewer a different opinion every iteration for
-    reasons unrelated to the code.
-    """
-    from devfactory.agents.reviewer import ReviewerAgent
-
-    assert DeveloperAgent().avoid_repeated_model is False
-    assert ReviewerAgent().avoid_repeated_model is False
-
-
 def test_opencode_backend_raises_on_nonzero_exit(monkeypatch, tmp_path):
     """A failed opencode run raises RuntimeError so the pipeline can react."""
     monkeypatch.setattr(settings, "workspace", tmp_path)

@@ -26,27 +26,12 @@ logger = logging.getLogger(__name__)
 
 class ReviewerAgent(BaseAgent):
     role = "reviewer"
-    # One review per loop iteration, each on a different diff. Keeping the same
-    # model across iterations means the developer answers a consistent reviewer
-    # instead of chasing a new opinion every round — rotating here caused the
-    # verdict to move for reasons unrelated to the code. (The previous setting
-    # existed because two reviewers ran back-to-back on the *same* diff; that pass
-    # no longer exists. A deliberate second opinion can come back later as its own
-    # step rather than as a side effect of model rotation.)
-    avoid_repeated_model = False
     # An agent reviewing its own work is not a review. Four models drive the
     # agentic loop, so keeping the reviewer off the developer's model costs
     # nothing and preserves the separation of duties documented in docs/VISION.md.
     avoid_models_from_roles = ["developer"]
 
-    def requires_agentic_loop(self) -> bool:
-        """The reviewer explores the codebase, so it needs a model that can."""
-        return True
-
     def run(self, ctx: PipelineContext) -> PipelineContext:
-        if ctx.pr_number is None:
-            logger.warning("[reviewer] No PR yet — skipping GitHub review posting")
-
         repo_path = settings.workspace / ctx.repo_name
         result_output = opencode.run(
             self._build_prompt(ctx),
@@ -72,12 +57,10 @@ class ReviewerAgent(BaseAgent):
                 "the code it is judging"
             )
 
+        # The verdict is recorded here and acted on by the graph. It reaches GitHub
+        # later, once the pull request exists — see Pipeline._publish_review.
         result = self._parse_review(result_output.output)
         ctx.review_results.append(result)
-
-        # Post to GitHub if PR exists
-        if ctx.pr_number:
-            self._post_github_review(ctx, result)
 
         logger.info(
             f"[reviewer] verdict={result.verdict} inline_comments={len(result.inline_comments)}"
@@ -166,11 +149,3 @@ class ReviewerAgent(BaseAgent):
             inline_comments=data.get("inline_comments", []),
             score=float(data.get("score", 0.5)),
         )
-
-    def _post_github_review(self, ctx: PipelineContext, result: ReviewResult):
-        try:
-            from devfactory.github.review import post_review
-
-            post_review(ctx, result)
-        except ImportError:
-            logger.warning("[reviewer] GitHub review module not yet available — skipping")

@@ -4,12 +4,12 @@ Orchestrator — runs the sequential agent pipeline for a single GitHub issue.
 Flow:
   1. Git setup  → clone repo, create feature branch
   2. Analyst    → reads the request AND the codebase, publishes a spec issue
-  3. Dev→Verification loop → developer writes code, ruff autofixes it, verification runs
-                   (max N retries)
+  3. Graph      → developer, then three gates (scope, verification, review); any
+                   gate can send the change back, on one shared budget
   4. Git push   → push feature branch to remote
-  5. PR         → create GitHub PR
-  6. Reviewer×2 → inline code reviews (different models)
-  7. Notify     → human notification on the issue
+  5. PR         → create GitHub PR, citing the spec issue
+  6. Review     → post the review that governed the accepted iteration
+  7. Labels     → the pipeline marks the issue's outcome itself
 """
 
 from __future__ import annotations
@@ -133,9 +133,6 @@ class Pipeline:
             # ── 6. Publish the review that governed the accepted iteration ────
             self._publish_review(ctx)
 
-            # ── 7. Human notification (via issue comment + label) ─────────────
-            # Done by poller.mark_ready_for_review after pipeline returns
-
             db.update_task(
                 task_id,
                 status="ready_for_merge",
@@ -189,14 +186,13 @@ class Pipeline:
         """Run the developer → gates graph until every gate is satisfied.
 
         The graph owns the flow (see :mod:`devfactory.graph`); this holds the
-        context the nodes work on and the two facts the routing needs.
+        context the nodes work on.
         """
         from devfactory.config import settings
 
         self._ctx = ctx
         self._task_id = task_id
         self._max_iterations = settings.max_verification_retries
-        self.last_gate_passed = False
 
         compiled = graph.build(self, self._max_iterations).compile(
             checkpointer=self._checkpointer()
@@ -208,21 +204,8 @@ class Pipeline:
         thread_id = self._thread_id or f"issue-{ctx.issue.number}-{ctx.started_at:%Y%m%d-%H%M%S}"
         logger.info(f"[pipeline] graph thread {thread_id} (resume with --resume {thread_id})")
         config = {"configurable": {"thread_id": thread_id}}
-        final = compiled.invoke(graph.initial_state(), config)
-        self._record_counters(final)
+        compiled.invoke(graph.initial_state(), config)
         return self._ctx
-
-    def _record_counters(self, state: graph.LoopState) -> None:
-        """Copy the graph's counters onto the context.
-
-        The graph owns them during the run — they are orchestration state and they
-        are what gets checkpointed. The context keeps a snapshot because the scorer
-        records `retry_count` from it and the pull request body reads it, and
-        because a run that ends badly should still say how many attempts it took.
-        """
-        self._ctx.verification_attempts = state["verification_attempts"]
-        self._ctx.review_rejections = state["review_rejections"]
-        self._ctx.scope_rejections = state["scope_rejections"]
 
     @staticmethod
     def _checkpointer():
@@ -240,11 +223,31 @@ class Pipeline:
         return SqliteSaver(conn)
 
     # ── Graph nodes ──────────────────────────────────────────────────────────
-    # Each runs one stage and reports what it decided. Routing lives in
-    # devfactory.graph, so the flow can be read in one place.
+    # Each runs one stage and reports whether the change may proceed. Routing
+    # lives in devfactory.graph, so the flow can be read in one place.
+    #
+    # The graph state is the truth for the counters — it is what gets checkpointed.
+    # The context mirrors them after every change, because the developer's prompt
+    # reads the counters to know which feedback to show, the scorer records them,
+    # and the pull request body cites them. A mirror that was only refreshed at
+    # the end left the developer retrying with no feedback at all.
 
-    def _iterations(self, state: graph.LoopState) -> int:
-        return graph._iterations_used(state)
+    def _refused(self, state: graph.LoopState, counter: str) -> graph.LoopState:
+        """The gate that just ran sent the change back: count it, mirror it."""
+        new_state = dict(state)
+        new_state[counter] = state[counter] + 1  # type: ignore[literal-required]
+        new_state["last_gate_passed"] = False
+        self._mirror(new_state)  # type: ignore[arg-type]
+        return new_state  # type: ignore[return-value]
+
+    @staticmethod
+    def _passed(state: graph.LoopState) -> graph.LoopState:
+        return {**state, "last_gate_passed": True}
+
+    def _mirror(self, state: graph.LoopState) -> None:
+        self._ctx.verification_attempts = state["verification_attempts"]
+        self._ctx.review_rejections = state["review_rejections"]
+        self._ctx.scope_rejections = state["scope_rejections"]
 
     def node_developer(self, state: graph.LoopState) -> graph.LoopState:
         from devfactory.github import git_ops
@@ -258,24 +261,22 @@ class Pipeline:
         if not git_ops.working_tree_has_changes(self._ctx):
             self._ctx.scope_report = ScopeReport.nothing_produced()
             logger.warning("[pipeline] Developer produced no changes")
-            self.last_gate_passed = False
-            return {**state, "scope_rejections": state["scope_rejections"] + 1}
+            return self._refused(state, "scope_rejections")
 
         # Clear the mechanical lint failures before the gates see them, so the
         # budget is spent on real defects rather than on line length.
         self._ctx.lint_left_behind.append(
             autofix(workspace_path(self._ctx), git_ops.changed_python_files(self._ctx))
         )
-        git_ops.commit_changes(self._ctx, attempt=self._iterations(state) + 1)
-        self.last_gate_passed = True
-        return state
+        git_ops.commit_changes(self._ctx, attempt=graph.iterations_used(state) + 1)
+        return self._passed(state)
 
     def node_scope(self, state: graph.LoopState) -> graph.LoopState:
         from devfactory.github import git_ops
         from devfactory.verification.scope import check_scope
 
         # The developer node already refused an empty change; nothing more to say.
-        if not self.last_gate_passed:
+        if not state["last_gate_passed"]:
             return state
 
         spec = self._ctx.task_spec
@@ -290,23 +291,21 @@ class Pipeline:
                 f"[pipeline] Files changed outside the task: {', '.join(report.unexpected)}"
             )
 
-        self.last_gate_passed = report.satisfied
         if report.satisfied:
-            return state
+            return self._passed(state)
 
         logger.warning(f"[pipeline] Declared files untouched: {', '.join(report.missing)}")
-        return {**state, "scope_rejections": state["scope_rejections"] + 1}
+        return self._refused(state, "scope_rejections")
 
     def node_verification(self, state: graph.LoopState) -> graph.LoopState:
         self._ctx = self.verification.execute(self._ctx)
         report = self._ctx.verification_report
-        self.last_gate_passed = bool(report and report.passed)
 
-        if self.last_gate_passed:
+        if report and report.passed:
             logger.info("[pipeline] Verification passed")
-            return state
+            return self._passed(state)
 
-        return {**state, "verification_attempts": state["verification_attempts"] + 1}
+        return self._refused(state, "verification_attempts")
 
     def node_review(self, state: graph.LoopState) -> graph.LoopState:
         self._ctx.diff = self._get_diff(self._ctx)
@@ -314,12 +313,11 @@ class Pipeline:
         verdict = self._ctx.review_results[-1].verdict if self._ctx.review_results else "commented"
 
         # Only changes_requested sends the change back; a suggestion is not a block.
-        self.last_gate_passed = verdict != "changes_requested"
-        if self.last_gate_passed:
+        if verdict != "changes_requested":
             logger.info(f"[pipeline] Review verdict={verdict} — proceeding to PR")
-            return state
+            return self._passed(state)
 
-        return {**state, "review_rejections": state["review_rejections"] + 1}
+        return self._refused(state, "review_rejections")
 
     def on_budget_exhausted(self, state: graph.LoopState) -> None:
         """Called when a gate refused for the last time.
@@ -329,8 +327,7 @@ class Pipeline:
         would produce nothing at all — the pull request opens with the gate
         recorded as unsatisfied, and a human arbitrates.
         """
-        # Snapshot before raising: a failed run should still record its attempts.
-        self._record_counters(state)
+        self._mirror(state)
 
         report = self._ctx.verification_report
         if report is not None and not report.passed:

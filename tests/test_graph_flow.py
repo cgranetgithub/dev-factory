@@ -13,49 +13,58 @@ from devfactory import graph
 
 
 class _FakePipeline:
-    """Only what the router reads."""
+    """Only what the router calls back into."""
 
-    def __init__(self, passed: bool):
-        self.last_gate_passed = passed
+    def __init__(self):
         self.exhausted_with: list = []
 
     def on_budget_exhausted(self, state):
         self.exhausted_with.append(state)
 
 
-def _state(verification=0, review=0, scope=0) -> graph.LoopState:
+def _state(verification=0, review=0, scope=0, passed=False) -> graph.LoopState:
     return graph.LoopState(
         verification_attempts=verification,
         review_rejections=review,
         scope_rejections=scope,
-        review_unresolved=False,
+        last_gate_passed=passed,
     )
 
 
 def test_a_run_starts_with_a_clean_budget():
-    assert graph._iterations_used(graph.initial_state()) == 0
+    assert graph.iterations_used(graph.initial_state()) == 0
 
 
 def test_every_gate_draws_on_the_same_budget():
     """A change alternating between gates must still terminate, so the counters
     add up rather than each getting three attempts of its own."""
-    assert graph._iterations_used(_state(verification=1, review=1, scope=1)) == 3
+    assert graph.iterations_used(_state(verification=1, review=1, scope=1)) == 3
 
 
 def test_a_passing_gate_moves_forward():
-    route = graph._router(_FakePipeline(passed=True), graph.VERIFICATION, max_iterations=3)
+    route = graph._router(_FakePipeline(), graph.VERIFICATION, max_iterations=3)
 
-    assert route(_state()) == graph.VERIFICATION
+    assert route(_state(passed=True)) == graph.VERIFICATION
 
 
 def test_a_failing_gate_sends_the_change_back():
-    route = graph._router(_FakePipeline(passed=False), graph.VERIFICATION, max_iterations=3)
+    route = graph._router(_FakePipeline(), graph.VERIFICATION, max_iterations=3)
 
-    assert route(_state(scope=1)) == graph.DEVELOPER
+    assert route(_state(scope=1, passed=False)) == graph.DEVELOPER
+
+
+def test_the_verdict_is_read_from_the_state_not_the_pipeline():
+    """A resumed run gets a fresh Pipeline object. If the verdict lived on that
+    object, resuming would read "not passed" and route straight back to the
+    developer whatever had actually happened. The router must not look at the
+    pipeline for it."""
+    route = graph._router(object(), graph.REVIEW, max_iterations=3)
+
+    assert route(_state(passed=True)) == graph.REVIEW
 
 
 def test_the_budget_stops_the_loop():
-    pipeline = _FakePipeline(passed=False)
+    pipeline = _FakePipeline()
     route = graph._router(pipeline, graph.VERIFICATION, max_iterations=3)
 
     assert route(_state(verification=2, review=1)) == graph.END_NODE
@@ -65,7 +74,7 @@ def test_the_budget_stops_the_loop():
 def test_the_budget_is_not_spent_one_iteration_early():
     """Off-by-one here costs a whole attempt, and a reviewer once caught exactly
     this mistake in a hand-written version."""
-    pipeline = _FakePipeline(passed=False)
+    pipeline = _FakePipeline()
     route = graph._router(pipeline, graph.VERIFICATION, max_iterations=3)
 
     assert route(_state(verification=2)) == graph.DEVELOPER
@@ -74,8 +83,6 @@ def test_the_budget_is_not_spent_one_iteration_early():
 
 def test_the_graph_has_the_four_nodes_and_compiles():
     class _P:
-        last_gate_passed = True
-
         def node_developer(self, s):
             return s
 

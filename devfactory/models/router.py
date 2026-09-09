@@ -49,20 +49,20 @@ class ModelRouter:
                 ", ".join(sorted(missing)),
             )
 
-    def select(
-        self,
-        role: str,
-        exclude: list[str] | None = None,
-        require_agentic_loop: bool = False,
-    ) -> ModelMeta:
+    def select(self, role: str, exclude: list[str] | None = None) -> ModelMeta:
         """
         Select a random model for the given role.
 
+        Every agent reaches its model through the harness, which drives an agentic
+        tool loop — so only models verified to drive that loop are ever selected.
+        A model registered for a role without ``drives_agentic_loop`` is a recorded
+        measurement ("this one answers in prose"), not a candidate. That filter used
+        to be a caller's choice, and the one caller that needed it lost the flag in
+        a refactor: the developer could then draw a prose-only model.
+
         Args:
-            role: Agent role ("analyst", "developer", "verification", "reviewer")
-            exclude: Model names to exclude (e.g. already used in this pipeline run)
-            require_agentic_loop: If True, only consider models verified to drive
-                the opencode agentic loop (needed by the "opencode" dev backend).
+            role: Agent role ("analyst", "developer", "reviewer")
+            exclude: Model names to exclude (e.g. the developer's, for the reviewer)
 
         Returns:
             Selected ModelMeta
@@ -75,13 +75,10 @@ class ModelRouter:
         if not candidates:
             raise RuntimeError(f"No models registered for role '{role}'")
 
+        candidates = [m for m in candidates if m.drives_agentic_loop]
+
         if exclude:
             candidates = [m for m in candidates if m.name not in exclude]
-
-        # Keep only models that actually drive the agentic loop when the caller
-        # needs it (opencode backend); tool-capable-but-prose models are dropped.
-        if require_agentic_loop:
-            candidates = [m for m in candidates if m.drives_agentic_loop]
 
         if self._verify:
             available = self._get_available()
@@ -90,9 +87,8 @@ class ModelRouter:
 
         if not candidates:
             raise RuntimeError(
-                f"No available models for role '{role}' "
-                f"(excluded: {exclude}, require_agentic_loop={require_agentic_loop}, "
-                "check Ollama and registry)"
+                f"No available models for role '{role}' that drive the agentic loop "
+                f"(excluded: {exclude}; check Ollama and the registry)"
             )
 
         selected = random.choice(candidates)

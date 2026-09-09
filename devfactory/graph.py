@@ -54,9 +54,11 @@ class LoopState(TypedDict):
     verification_attempts: int
     review_rejections: int
     scope_rejections: int
-    # Set when the budget ran out with the reviewer still unsatisfied, so the PR
-    # can say so instead of presenting the change as agreed.
-    review_unresolved: bool
+    # Whether the node that just ran let the change through. It is *in the state*
+    # on purpose: a resumed run gets a fresh Pipeline object, and a verdict kept
+    # on that object would come back as "not passed" and route the resumed run
+    # straight back to the developer regardless of what actually happened.
+    last_gate_passed: bool
 
 
 def build(pipeline: Pipeline, max_iterations: int):
@@ -106,10 +108,10 @@ def _router(pipeline: Pipeline, on_pass: str, max_iterations: int):
     """
 
     def route(state: LoopState) -> str:
-        if pipeline.last_gate_passed:
+        if state["last_gate_passed"]:
             return on_pass
 
-        if _iterations_used(state) >= max_iterations:
+        if iterations_used(state) >= max_iterations:
             # The budget is spent. The pipeline decides whether that ends the run
             # or opens the pull request with the gate unsatisfied — a verification
             # failure is fatal, an unconvinced reviewer is for a human to arbitrate.
@@ -121,7 +123,7 @@ def _router(pipeline: Pipeline, on_pass: str, max_iterations: int):
     return route
 
 
-def _iterations_used(state: LoopState) -> int:
+def iterations_used(state: LoopState) -> int:
     """Developer iterations consumed, whichever gate sent the change back.
 
     Every gate draws on one budget: a change alternating between them must still
@@ -135,5 +137,5 @@ def initial_state() -> LoopState:
         verification_attempts=0,
         review_rejections=0,
         scope_rejections=0,
-        review_unresolved=False,
+        last_gate_passed=False,
     )
