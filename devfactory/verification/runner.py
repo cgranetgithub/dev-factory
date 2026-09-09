@@ -1,14 +1,26 @@
 """
 Verification Runner — executes ruff, mypy, bandit, pytest inside a Docker container.
 Returns a structured VerificationReport.
+
+Every tool result carries a status: ``clean``, ``findings`` or ``error``. The third
+one exists because a tool that crashes says nothing, and nothing used to parse as
+"no issues". Ruff unable to write its cache to a read-only mount, mypy the same,
+a missing binary — each produced empty output, and the gate passed code it had
+not checked. A tool in the error state now fails the report and names itself in
+the summary, with what it printed.
+
+The classification leans on exit codes first and output second: a tool's exit
+status is the one thing it reports reliably even when its output is garbage.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 import subprocess
 from pathlib import Path
+from typing import Any
 
 from devfactory.config import settings
 from devfactory.context import VerificationReport
@@ -20,6 +32,22 @@ logger = logging.getLogger(__name__)
 # and has no such directory — see _build_summary, which strips it back out.
 CONTAINER_WORKDIR = "/workspace"
 
+# The three states a tool result can be in.
+CLEAN = "clean"
+FINDINGS = "findings"
+ERROR = "error"
+
+# Exit codes of our own, chosen outside every tool's range so they cannot be
+# confused with a verdict.
+_TIMED_OUT = -1  # the container did not finish within the deadline
+_SETUP_FAILED = 90  # the pytest command could not `pip install .` the project
+
+# How much of a failed tool's output reaches the summary. Enough to diagnose,
+# short enough not to drown the findings of the tools that did run.
+_RAW_TAIL = 1500
+
+_COUNT = re.compile(r"(\d+) (passed|failed|error)")
+
 
 class VerificationRunner:
     def __init__(self, image: str | None = None):
@@ -30,19 +58,22 @@ class VerificationRunner:
         if not repo_path.exists():
             raise FileNotFoundError(f"Repo path not found: {repo_path}")
 
-        logger.info(f"[qa_runner] running on {repo_path} with image={self.image}")
+        logger.info(f"[verification] running on {repo_path} with image={self.image}")
 
         ruff = self._run_ruff(repo_path)
         mypy = self._run_mypy(repo_path)
         bandit = self._run_bandit(repo_path)
         pytest = self._run_pytest(repo_path)
 
+        # A tool that did not run has not passed, whatever the others say.
+        every_tool_ran = all(r["status"] != ERROR for r in (ruff, mypy, bandit, pytest))
         passed = (
-            len(ruff.get("issues", [])) == 0
-            and len(mypy.get("errors", [])) == 0
-            and bandit.get("severity", "none") not in ("HIGH", "MEDIUM")
-            and pytest.get("failed", 0) == 0
-            and pytest.get("errors", []) == []
+            every_tool_ran
+            and len(ruff["issues"]) == 0
+            and len(mypy["errors"]) == 0
+            and bandit["severity"] not in ("HIGH", "MEDIUM")
+            and pytest["failed"] == 0
+            and pytest["errors"] == []
         )
 
         summary = self._build_summary(ruff, mypy, bandit, pytest, passed)
@@ -62,7 +93,10 @@ class VerificationRunner:
 
         The repo is mounted read-only; ``timeout`` bounds the whole container run
         (the pytest step passes a larger value because it installs the project
-        first — see :meth:`_run_pytest`).
+        first — see :meth:`_run_pytest`). The exit code is the tool's own, so the
+        callers can read it; a timeout is reported as :data:`_TIMED_OUT` rather
+        than raised, because "the tests did not finish" is a verification result
+        the developer should hear about, not a pipeline crash.
         """
         full_cmd = [
             "docker",
@@ -77,104 +111,128 @@ class VerificationRunner:
             "-c",
             cmd,
         ]
-        result = subprocess.run(full_cmd, capture_output=True, text=True, timeout=timeout)
+        try:
+            result = subprocess.run(full_cmd, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            partial = exc.stdout or ""
+            if isinstance(partial, bytes):
+                partial = partial.decode(errors="replace")
+            return f"{partial}\n[timed out after {timeout}s]", _TIMED_OUT
         return result.stdout + result.stderr, result.returncode
 
     def _run_ruff(self, repo_path: Path) -> dict:
-        # --no-cache: /workspace is read-only, so ruff cannot create its
-        # .ruff_cache there. Without this it crashes and the empty output is
-        # misread as "0 issues" (a false pass). No cache is fine for a one-shot verification run.
+        # --no-cache: /workspace is read-only, so ruff cannot create its .ruff_cache
+        # there. Without it ruff crashes — which is now an error state rather than
+        # a false pass, but still not a useful run.
+        # Exit codes: 0 clean, 1 violations found, 2 could not run.
         output, code = self._docker_run(
-            repo_path, "ruff check . --no-cache --output-format=json 2>/dev/null || true"
+            repo_path, "ruff check . --no-cache --output-format=json 2>&1"
         )
-        try:
-            issues = json.loads(output) if output.strip().startswith("[") else []
-        except json.JSONDecodeError:
-            issues = []
-        return {"issues": issues, "returncode": code}
+        issues = _json_array(output)
+        if code in (0, 1) and issues is not None and bool(issues) == (code == 1):
+            return {"status": FINDINGS if issues else CLEAN, "issues": issues, "returncode": code}
+        return _tool_error("ruff", output, code, issues=[])
 
     def _run_mypy(self, repo_path: Path) -> dict:
         # --cache-dir in /tmp: /workspace is read-only, so mypy cannot write its
-        # default .mypy_cache there. Without this it crashes and reports no
-        # errors — another false pass hiding real type errors.
+        # default .mypy_cache there.
+        # Exit codes: 0 clean, 1 type errors, 2 could not run.
         output, code = self._docker_run(
             repo_path,
-            "mypy . --ignore-missing-imports --cache-dir=/tmp/mypy_cache 2>&1 || true",
+            "mypy . --ignore-missing-imports --cache-dir=/tmp/mypy_cache 2>&1",
         )
         errors = [line for line in output.splitlines() if ": error:" in line]
-        return {"errors": errors, "raw": output, "returncode": code}
+        if code == 0 and "Success:" in output:
+            return {"status": CLEAN, "errors": [], "raw": output, "returncode": code}
+        if code == 1 and errors:
+            return {"status": FINDINGS, "errors": errors, "raw": output, "returncode": code}
+        return _tool_error("mypy", output, code, errors=[])
 
     def _run_bandit(self, repo_path: Path) -> dict:
-        output, code = self._docker_run(repo_path, "bandit -r . -f json -q 2>/dev/null || true")
-        try:
-            data = json.loads(output)
-            results = data.get("results", [])
-            severities = [r["issue_severity"] for r in results]
-            top_severity = (
-                "HIGH"
-                if "HIGH" in severities
-                else "MEDIUM"
-                if "MEDIUM" in severities
-                else "LOW"
-                if severities
-                else "none"
-            )
-        except (json.JSONDecodeError, KeyError):
-            results = []
-            top_severity = "none"
-        return {"findings": results, "severity": top_severity, "returncode": code}
+        # Exit codes: 0 no findings, 1 findings; anything else could not run.
+        output, code = self._docker_run(repo_path, "bandit -r . -f json -q 2>&1")
+        data = _json_object(output)
+        if code not in (0, 1) or data is None or not isinstance(data.get("results"), list):
+            return _tool_error("bandit", output, code, findings=[], severity="none")
+
+        results = data["results"]
+        severities = [r.get("issue_severity", "LOW") for r in results]
+        top_severity = (
+            "HIGH"
+            if "HIGH" in severities
+            else "MEDIUM"
+            if "MEDIUM" in severities
+            else "LOW"
+            if severities
+            else "none"
+        )
+        return {
+            "status": FINDINGS if results else CLEAN,
+            "findings": results,
+            "severity": top_severity,
+            "returncode": code,
+        }
 
     def _run_pytest(self, repo_path: Path) -> dict:
-        # The test container ships only the verification tools, not the project's runtime
-        # dependencies. Each tool runs in a fresh container, so we install the
-        # mounted project (which pulls its declared deps) in the SAME command
-        # that runs pytest — otherwise every `import <project>` fails at
-        # collection. A non-editable `pip install .` builds in a temp dir, so it
-        # works even though /workspace is mounted read-only.
-        # If setup fails we surface it explicitly instead of letting it look like
-        # a mysterious test failure.
-        # /workspace is mounted read-only, but `pip install .` needs to write
-        # <pkg>.egg-info into the source tree. Copy the repo into a writable temp
-        # dir inside the container, install + run pytest there. The read-only
-        # mount stays untouched (tests can't mutate the candidate checkout).
+        # The test container ships only the verification tools, not the project's
+        # runtime dependencies. Each tool runs in a fresh container, so we install
+        # the mounted project (which pulls its declared deps) in the SAME command
+        # that runs pytest — otherwise every `import <project>` fails at collection.
+        # /workspace is mounted read-only, and `pip install .` needs to write
+        # <pkg>.egg-info into the source tree, so the repo is copied into a
+        # writable temp dir first. The read-only mount stays untouched (tests can't
+        # mutate the candidate checkout).
+        # A failed install exits with a code of our own, so it is reported as the
+        # environment failing rather than as a mysterious test failure.
         cmd = (
             'D=$(mktemp -d); cp -r /workspace/. "$D"/ 2>/dev/null; cd "$D"; '
             "if [ -f pyproject.toml ] || [ -f setup.py ]; then "
-            "pip install -q . 2>&1 || { echo '##DEVFACTORY_SETUP_FAILED##'; exit 0; }; "
+            f"pip install -q . 2>&1 || exit {_SETUP_FAILED}; "
             "fi; "
-            "pytest --tb=short -q 2>&1 || true"
+            "pytest --tb=short -q 2>&1"
         )
         # Larger timeout than the other tools: this step also installs deps.
         output, code = self._docker_run(repo_path, cmd, timeout=300)
 
-        if "##DEVFACTORY_SETUP_FAILED##" in output:
-            return {
-                "passed": 0,
-                "failed": 0,
-                "errors": [
-                    "verification environment setup failed: `pip install .` did not complete in "
-                    "the test container (check the project's dependencies build cleanly)."
-                ],
-                "raw": output,
-                "setup_failed": True,
-            }
+        # Exit codes: 0 all passed, 1 some failed, 5 nothing collected; 2, 3 and 4
+        # are interruption, internal error and usage error — none of them a verdict.
+        counts: dict[str, int] = {"passed": 0, "failed": 0, "error": 0}
+        for count, kind in _COUNT.findall(output):
+            counts[kind] = int(count)
+        problems = [line for line in output.splitlines() if "FAILED" in line or "ERROR" in line]
 
-        passed = failed = 0
-        errors = []
-        for line in output.splitlines():
-            if " passed" in line:
-                try:
-                    passed = int(line.split(" passed")[0].split()[-1])
-                except ValueError:
-                    pass
-            if " failed" in line:
-                try:
-                    failed = int(line.split(" failed")[0].split()[-1])
-                except ValueError:
-                    pass
-            if "ERROR" in line or "FAILED" in line:
-                errors.append(line)
-        return {"passed": passed, "failed": failed, "errors": errors[:20], "raw": output}
+        if code == _SETUP_FAILED:
+            return _tool_error(
+                "pytest",
+                output,
+                code,
+                passed=0,
+                failed=0,
+                errors=[],
+                reason="the project could not be installed (`pip install .` failed)",
+            )
+        result = {"raw": output, "returncode": code}
+        if code == 0 and counts["passed"] > 0:
+            return {
+                "status": CLEAN,
+                "passed": counts["passed"],
+                "failed": 0,
+                "errors": [],
+                **result,
+            }
+        if code == 5:
+            # Nothing to run is not a failure of the code under test; the summary
+            # says so, and the record keeps the zero.
+            return {"status": CLEAN, "passed": 0, "failed": 0, "errors": [], **result}
+        if code == 1 and (counts["failed"] or counts["error"]):
+            return {
+                "status": FINDINGS,
+                "passed": counts["passed"],
+                "failed": counts["failed"],
+                "errors": problems[:20],
+                **result,
+            }
+        return _tool_error("pytest", output, code, passed=0, failed=0, errors=[])
 
     def _build_summary(
         self, ruff: dict, mypy: dict, bandit: dict, pytest: dict, passed: bool
@@ -183,16 +241,17 @@ class VerificationRunner:
         lines.append(f"**Overall: {'✓ PASSED' if passed else '✗ FAILED'}**\n")
 
         ruff_count = len(ruff.get("issues", []))
-        lines.append(f"- **Ruff (lint):** {ruff_count} issue(s)")
+        lines.append(f"- **Ruff (lint):** {_status_or(ruff, f'{ruff_count} issue(s)')}")
 
         mypy_count = len(mypy.get("errors", []))
-        lines.append(f"- **Mypy (types):** {mypy_count} error(s)")
+        lines.append(f"- **Mypy (types):** {_status_or(mypy, f'{mypy_count} error(s)')}")
 
         sev = bandit.get("severity", "none")
-        lines.append(f"- **Bandit (security):** severity={sev}")
+        lines.append(f"- **Bandit (security):** {_status_or(bandit, f'severity={sev}')}")
 
         p, f = pytest.get("passed", 0), pytest.get("failed", 0)
-        lines.append(f"- **Pytest:** {p} passed, {f} failed")
+        ran = f"{p} passed, {f} failed" if (p or f) else "no tests collected"
+        lines.append(f"- **Pytest:** {_status_or(pytest, ran)}")
 
         if not passed:
             lines.append("\n### Issues to fix:")
@@ -208,9 +267,66 @@ class VerificationRunner:
             for err in pytest.get("errors", [])[:5]:
                 lines.append(f"  - [pytest] {err}")
 
+        # A tool that did not run is named, with what it printed: the developer
+        # cannot fix a finding nobody made, but it can often fix what stopped the
+        # tool — a syntax error, a missing dependency, a broken pyproject.
+        failed_tools = [
+            (name, r)
+            for name, r in (("ruff", ruff), ("mypy", mypy), ("bandit", bandit), ("pytest", pytest))
+            if r.get("status") == ERROR
+        ]
+        if failed_tools:
+            lines.append("\n### Tools that did not run:")
+            for name, r in failed_tools:
+                lines.append(f"- **{name}**: {r['error']}")
+                tail = (r.get("raw") or "").strip()[-_RAW_TAIL:]
+                if tail:
+                    lines.append(f"  ```\n{tail}\n  ```")
+
         # The summary is fed back to the developer agent on a verification retry, and that
         # agent works in the host workspace — "/workspace/devfactory/foo.py" is a
         # path it cannot resolve. Every tool reports under the container mount, so
         # strip the prefix once here rather than in each parser: the agent then
         # receives repo-relative paths it can actually open.
         return "\n".join(lines).replace(f"{CONTAINER_WORKDIR}/", "")
+
+
+def _tool_error(tool: str, output: str, code: int, reason: str | None = None, **empty) -> dict:
+    """A result in the error state, keeping the keys the scorer reads (empty)."""
+    if reason is None:
+        if code == _TIMED_OUT:
+            reason = "did not finish in time"
+        elif code == 127:
+            reason = "command not found in the verification image"
+        elif not output.strip():
+            reason = f"exited {code} and printed nothing"
+        else:
+            reason = f"exited {code} with output that is not a verdict"
+    logger.warning(f"[verification] {tool} did not run: {reason}")
+    return {"status": ERROR, "error": reason, "raw": output, "returncode": code, **empty}
+
+
+def _status_or(result: dict, detail: str) -> str:
+    return "did not run" if result.get("status") == ERROR else detail
+
+
+def _json_array(output: str) -> list | None:
+    """The JSON array in ``output``, skipping any warning lines printed before it."""
+    data = _json_from(output, "[")
+    return data if isinstance(data, list) else None
+
+
+def _json_object(output: str) -> dict | None:
+    data = _json_from(output, "{")
+    return data if isinstance(data, dict) else None
+
+
+def _json_from(output: str, opener: str) -> Any:
+    lines = output.splitlines()
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith(opener):
+            try:
+                return json.loads("\n".join(lines[i:]))
+            except json.JSONDecodeError:
+                return None
+    return None

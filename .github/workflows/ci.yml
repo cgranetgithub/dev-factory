@@ -1,13 +1,13 @@
 # Independent verification of every change reaching `main`.
 #
 # The factory runs the same four tools inside its own Docker container
-# (`devfactory/qa/runner.py`), but that runner is part of the process being
+# (`devfactory/verification/runner.py`), but that runner is part of the process being
 # audited: it decides for itself whether its own output is acceptable. This
 # workflow re-runs the checks on GitHub's infrastructure so the platform — not
 # the pipeline — enforces the gate. Once it is a required status check on the
 # `main` ruleset, "Verification passed" stops being a self-assertion.
 #
-# Keep the tool invocations below aligned with `devfactory/qa/runner.py`:
+# Keep the tool invocations below aligned with `devfactory/verification/runner.py`:
 #   - Python 3.11 matches `docker/Dockerfile.test`
 #   - bandit uses `-ll` (medium and above), matching the runner's pass rule,
 #     which fails only on MEDIUM or HIGH findings
