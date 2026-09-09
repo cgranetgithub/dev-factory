@@ -2,10 +2,11 @@
 DevFactory knowledge base — SQLite persistence layer.
 
 Schema:
-    models      — registered LLM models (name, parameters, provider).
-    tasks       — one row per processed GitHub issue.
-    executions  — one row per agent×model run within a task.
-    scores      — quality metrics attached to each execution.
+    models             — registered LLM models (name, parameters, provider).
+    tasks              — one row per processed GitHub issue.
+    executions         — one row per agent×model run within a task.
+    scores             — quality metrics attached to each execution.
+    control_snapshots  — one row per branch-protection control check (append-only).
 
 Use the ``db`` singleton for all access::
 
@@ -70,10 +71,26 @@ CREATE TABLE IF NOT EXISTS scores (
     created_at   TEXT DEFAULT (datetime('now'))
 );
 
+-- One row per `devfactory controls check`. Append-only: the series of rows is the
+-- evidence that the branch-protection controls operated throughout a period, and a
+-- series with rows rewritten or pruned evidences nothing. Hence no UPDATE and no
+-- DELETE method below, and `previous_id` chaining each reading to the one it was
+-- compared against so a gap in the chain is visible.
+CREATE TABLE IF NOT EXISTS control_snapshots (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo          TEXT NOT NULL,
+    taken_at      TEXT NOT NULL,   -- UTC, ISO-8601, written by the caller
+    snapshot_json TEXT NOT NULL,   -- canonical JSON of the enforced configuration
+    sha256        TEXT NOT NULL,   -- SHA-256 of snapshot_json
+    drift_json    TEXT,            -- NULL on the first reading for a repo (baseline)
+    previous_id   INTEGER REFERENCES control_snapshots(id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_executions_task   ON executions(task_id);
 CREATE INDEX IF NOT EXISTS idx_executions_model  ON executions(model_id);
 CREATE INDEX IF NOT EXISTS idx_scores_execution  ON scores(execution_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_issue       ON tasks(github_issue_id);
+CREATE INDEX IF NOT EXISTS idx_control_repo      ON control_snapshots(repo, id);
 """
 
 # Valid task statuses — enforced at application level
@@ -223,6 +240,63 @@ class Database:
                 "INSERT INTO scores (execution_id, metric, value, notes) VALUES (?, ?, ?, ?)",
                 (execution_id, metric, value, notes),
             )
+
+    # ── Control snapshots ──────────────────────────────────────────────────────
+    #
+    # Insert and read only. There is deliberately no update_control_snapshot and no
+    # delete_control_snapshot: these rows are the audit evidence that the branch
+    # protections operated continuously, and evidence a process can edit after the
+    # fact is not evidence. A correction is a new reading, not a rewritten one.
+
+    def record_control_snapshot(
+        self,
+        repo: str,
+        taken_at: str,
+        snapshot_json: str,
+        sha256: str,
+        drift_json: str | None = None,
+        previous_id: int | None = None,
+    ) -> int:
+        """Append one control-check record and return its id.
+
+        Args:
+            repo: Repository in ``owner/repo`` form.
+            taken_at: UTC ISO-8601 timestamp of the reading.
+            snapshot_json: Canonical JSON of the enforced configuration.
+            sha256: SHA-256 of ``snapshot_json``.
+            drift_json: JSON list of the changes since ``previous_id``; ``None``
+                for the first reading of a repository.
+            previous_id: Id of the reading this one was compared against.
+
+        Returns:
+            The id of the inserted row.
+        """
+        with self._conn() as conn:
+            cur = conn.execute(
+                """INSERT INTO control_snapshots
+                   (repo, taken_at, snapshot_json, sha256, drift_json, previous_id)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (repo, taken_at, snapshot_json, sha256, drift_json, previous_id),
+            )
+            return int(cur.lastrowid)
+
+    def latest_control_snapshot(self, repo: str) -> dict | None:
+        """Return the most recent control-check record for a repo, or None."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM control_snapshots WHERE repo=? ORDER BY id DESC LIMIT 1",
+                (repo,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def control_snapshots(self, repo: str, limit: int = 20) -> list[dict]:
+        """Return a repo's control-check records, most recent first."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM control_snapshots WHERE repo=? ORDER BY id DESC LIMIT ?",
+                (repo, limit),
+            ).fetchall()
+            return [dict(r) for r in rows]
 
     # ── Stats queries ──────────────────────────────────────────────────────────
 

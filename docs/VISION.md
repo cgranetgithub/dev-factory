@@ -224,10 +224,26 @@ A `devfactory controls check` command that:
 - optionally **fails closed**: if the policy is not met, the pipeline refuses to open a PR.
   That is the stronger control, and it is a policy decision per project.
 
+**What exists today.** The first part of that mechanism is implemented: `devfactory
+controls check --repo owner/repo` reads the rulesets targeting the default branch (their
+enforcement, bypass actors and every rule's parameters), the *effective* rules GitHub
+reports for the branch, the collaborators and their roles, `allow_auto_merge`, and the
+CODEOWNERS path with a SHA-256 of its content. The reading is normalised to canonical JSON
+— sorted keys, sorted lists — so an unchanged configuration hashes identically whatever
+order the API returned it in, and every check is appended to the knowledge base
+(`control_snapshots`) with its timestamp, its hash and the field-by-field drift against the
+previous reading. `Database` exposes insert and read for that table and nothing else: a
+series of records a process can rewrite is not evidence. The command exits 0 when nothing
+moved, 1 on drift, 2 when the configuration could not be read. Still to come: comparison
+against a declarative policy versioned in the repository, and the orchestrator running the
+check before opening a PR with an optional fail-closed mode.
+
 **Attribution limit, stated up front:** GitHub's `audit-log` API is Enterprise Cloud only.
 On a personal repository we can detect *that* a control changed and *when* (to the
 resolution of our polling interval), but not *by whom*. Clients needing attribution must
 host in an Enterprise org. Failing closed partly compensates for the missing attribution.
+This is a documented limit, not a defect: `devfactory controls check` records *what* changed
+and *when* it was first observed, never *who* changed it.
 
 ---
 

@@ -301,6 +301,18 @@ devfactory models             # show registry vs. Ollama availability
 devfactory models --sync      # register all Ollama models in the KB
 ```
 
+### Verify the repository controls
+
+```bash
+devfactory controls check --repo owner/repo          # exit 0 = no drift, 1 = drift, 2 = unreadable
+devfactory controls check --repo owner/repo --json   # canonical snapshot + drift, as JSON
+```
+
+Snapshots the branch protections enforced on the default branch (ruleset rules, bypass
+actors, collaborator roles, CODEOWNERS hash, auto-merge), appends the reading to the
+knowledge base with its timestamp and hash, and reports what changed since the previous
+check. See [`docs/VISION.md`](docs/VISION.md), "Verifying the controls".
+
 ### Browse run logs
 
 ```bash
