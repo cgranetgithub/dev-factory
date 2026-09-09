@@ -1,0 +1,27 @@
+# Keeps the dependencies current — pyproject.toml uses lower bounds only, so
+# nothing else would tell us when an advisory lands on httpx or PyGithub, and
+# this project holds a repo-scoped token.
+#
+# Updates are grouped: one pull request a week per ecosystem rather than one per
+# package, since each one costs a CI run and a human approval.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      python-dependencies:
+        patterns: ["*"]
+    labels: [dependencies]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]
+    labels: [dependencies]
