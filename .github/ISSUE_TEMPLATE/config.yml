@@ -1,0 +1,7 @@
+# Blank issues are a supported input, not a fallback: a short, vague, client-style
+# request is exactly what the analyst agent is designed to turn into a spec.
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/cgranetgithub/dev-factory/security
+    about: Do not open a public issue for a vulnerability — see SECURITY.md for how to report privately.
