@@ -7,6 +7,60 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+**The specification is the issue**
+- The developer, the reviewer, the scope gate and the pull request body all fetch the
+  specification from its GitHub issue, each time they need it. It was published there and
+  then handed on as a Python copy, which made the issue decoration: amending it changed
+  nothing, because the copy was what got built
+- `PipelineContext.task_spec` is gone, and with it the last hand-off between agents. The
+  autonomy rule now holds in code, not only in the architecture document
+- The spec issue body is parsed back tolerantly — ticked checkboxes, `*` bullets, prose over
+  several lines, an unknown section ignored rather than misfiled — because a human is
+  expected to edit it. It asks the reader to keep the section headings, since that is how
+  it is read
+- A resumed run no longer re-runs the analyst: it finds the spec issue it already published
+  and reads that. Re-running spent a model call to overwrite whatever a human had amended
+  while the run was down
+
+**A tool that did not run is not a pass**
+- Every verification tool result carries a status — `clean`, `findings` or `error` — and an
+  error fails the report whatever the other tools say. Empty output was read as "no
+  findings": ruff unable to write its cache to the read-only mount printed an error, exited
+  2, and the gate passed code it had never checked. Mypy the same, and so did a missing
+  binary, a timed-out container and a project that would not install
+- Classification reads the exit code first and the output second. Ruff exiting 1 with an
+  empty finding list is an error too: a tool that contradicts itself has delivered no verdict
+- The summary names each tool that did not run and shows the tail of its output. The
+  developer cannot fix a finding nobody made, but it can often fix what stopped the tool
+- A container timeout is a verification result, not a pipeline crash
+
+**Three regressions left by the migrations**
+- The developer retried blind. The graph state held the counters and the context mirrored
+  them only after the loop, so on every retry the prompt saw them at zero and showed no
+  feedback from the gate that had just refused
+- The developer could draw a prose-only model. The override that prevented it was removed
+  with the single-shot backend; the router now filters on `drives_agentic_loop` for every
+  role, always
+- `last_gate_passed` lived on the `Pipeline` object rather than in the graph state, so a
+  resumed run — which gets a fresh object — read "not passed" and went back to the developer
+  regardless of what had actually happened
+
+**Housekeeping**
+- `ruff check --fix` and `ruff format` run as pre-commit hooks, from the environment rather
+  than a pinned mirror, so the hook and CI cannot disagree about what is clean. With
+  `dismiss_stale_reviews_on_push` enabled, a formatting fix pushed after approval costs the
+  approval — paid several times
+- Dependabot watches `pip` and `github-actions` weekly, grouped; `.editorconfig` states to
+  the editor what ruff enforces
+- The published URLs point at the real repository. The scaffolding placeholder had survived
+  into the package metadata, the README, `CONTRIBUTING.md` and the footer of every pull
+  request the factory opened — a 404 at the first thing a visitor clicks
+- Dead code removed after the migrations: the unused analyst token ceiling, the superseded
+  developer prompt, `_GENERAL_ROLES`, the reviewer's in-loop GitHub posting, the message
+  helpers, and `review_unresolved` from the graph state. `mark_qa_failed` becomes
+  `mark_verification_failed`, the last survivor of the rename
+- `retry_count` in the knowledge base records the iterations actually used, split by gate
+
 **Harness and gates**
 - The OpenCode runner gains a **startup deadline**: a run that has written nothing after
   120s has hung before reaching the model — observed twice — and is abandoned instead of
