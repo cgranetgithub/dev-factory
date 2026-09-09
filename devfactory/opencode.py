@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import select
 import subprocess
 import time
 from dataclasses import dataclass
@@ -163,17 +162,26 @@ def _launch(cmd: list[str], env: dict[str, str], role: str) -> subprocess.Comple
 
 
 def _wait_for(process: subprocess.Popen[str], role: str) -> subprocess.CompletedProcess[str]:
+    """Wait under both deadlines, and tell a hung run apart from a slow one.
+
+    The evidence for "it is alive" comes from the timed-out ``communicate`` itself,
+    which reports on the exception what it had already read. It has to: waiting
+    *is* reading, so by the time the startup deadline fires the pipes have been
+    drained into that call and there is nothing left to look at. Asking the pipes
+    instead — which is what this did — answers "nothing written" for every run,
+    and so condemns every run slower than the startup deadline.
+    """
     deadline = settings.opencode_startup_timeout_s
     try:
         stdout, stderr = process.communicate(timeout=deadline)
-    except subprocess.TimeoutExpired:
-        pass
+    except subprocess.TimeoutExpired as expired:
+        produced_output = bool(expired.stdout) or bool(expired.stderr)
     else:
         return subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
 
     # Still running after the startup deadline. That is normal for real work, and
     # the way to tell the two apart is whether anything has been written yet.
-    if not _has_written_anything(process):
+    if not produced_output:
         raise _StartupHangError(
             f"opencode produced no output in {deadline}s — it appears to have hung "
             f"before reaching the model, so the run was abandoned rather than "
@@ -187,21 +195,6 @@ def _wait_for(process: subprocess.Popen[str], role: str) -> subprocess.Completed
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"opencode run timed out after {settings.opencode_timeout_s}s") from exc
     return subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
-
-
-def _has_written_anything(process: subprocess.Popen[str]) -> bool:
-    """Whether the process has written to stdout or stderr yet.
-
-    Checked without reading, so the pipes stay intact for `communicate`: a
-    non-empty read buffer on either descriptor is enough to say it is alive.
-    """
-    for stream in (process.stdout, process.stderr):
-        if stream is None:
-            continue
-        ready, _, _ = select.select([stream], [], [], 0)
-        if ready:
-            return True
-    return False
 
 
 def _env(model_name: str) -> dict[str, str]:
