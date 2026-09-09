@@ -210,8 +210,8 @@ the tool definitions overflow and a capable model looks incapable.
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/devfactory.git
-cd devfactory
+git clone https://github.com/cgranetgithub/dev-factory.git
+cd dev-factory
 
 # Create a virtual environment with uv (recommended)
 uv venv .venv
