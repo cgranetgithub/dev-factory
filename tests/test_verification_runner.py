@@ -4,6 +4,11 @@ Tests for how the verification runner reads each tool's result.
 Issue #25. Every tool used to be parsed as "no output means no findings", so a
 tool that crashed passed the gate. Docker is stubbed at ``_docker_run``: each test
 scripts what a tool printed and how it exited, and asserts the classification.
+
+Since issue #77 mypy and pytest share one container over one installed copy of
+the repo, so scripting them means scripting one marker-framed stream — see
+:func:`_combined`. Tests that need to script the shared step as a whole (a failed
+install, a container that died mid-step) pass ``combined=`` instead.
 """
 
 from __future__ import annotations
@@ -25,7 +30,23 @@ _BANDIT_CLEAN = (json.dumps({"results": []}), 0)
 _PYTEST_CLEAN = ("....\n4 passed in 0.10s", 0)
 
 
-def _runner(monkeypatch, **scripted: tuple[str, int]) -> VerificationRunner:
+def _combined(mypy: tuple[str, int], pytest_: tuple[str, int]) -> tuple[str, int]:
+    """What the shared mypy+pytest container prints, framed as the runner frames it.
+
+    The step's own exit code is the last command's, so pytest's.
+    """
+    mypy_out, mypy_code = mypy
+    pytest_out, pytest_code = pytest_
+    return (
+        f"##DEVFACTORY:MYPY##\n{mypy_out}\n##DEVFACTORY:MYPY_EXIT:{mypy_code}##\n"
+        f"##DEVFACTORY:PYTEST##\n{pytest_out}\n##DEVFACTORY:PYTEST_EXIT:{pytest_code}##",
+        pytest_code,
+    )
+
+
+def _runner(
+    monkeypatch, combined: tuple[str, int] | None = None, **scripted: tuple[str, int]
+) -> VerificationRunner:
     """A runner whose container answers are scripted per tool, others clean."""
     answers = {
         "ruff": _RUFF_CLEAN,
@@ -36,15 +57,21 @@ def _runner(monkeypatch, **scripted: tuple[str, int]) -> VerificationRunner:
     }
 
     def fake_docker_run(self, repo_path, cmd, timeout=120):
-        tool = next(name for name in answers if name in cmd)
-        return answers[tool]
+        # Ruff and bandit each get their own container; the shared mypy+pytest
+        # step is the one left, and its command names both tools, so it cannot be
+        # matched by tool name any more.
+        if "ruff" in cmd:
+            return answers["ruff"]
+        if "bandit" in cmd:
+            return answers["bandit"]
+        return combined if combined is not None else _combined(answers["mypy"], answers["pytest"])
 
     monkeypatch.setattr(VerificationRunner, "_docker_run", fake_docker_run)
     return VerificationRunner(image="test-image")
 
 
-def _report(monkeypatch, tmp_path, **scripted):
-    return _runner(monkeypatch, **scripted).run(tmp_path)
+def _report(monkeypatch, tmp_path, combined=None, **scripted):
+    return _runner(monkeypatch, combined, **scripted).run(tmp_path)
 
 
 # ── Everything clean ─────────────────────────────────────────────────────────
@@ -215,13 +242,59 @@ def test_pytest_that_printed_nothing_is_an_error(monkeypatch, tmp_path):
     assert report.pytest["status"] == ERROR
 
 
-def test_a_project_that_cannot_be_installed_is_an_error_named_as_such(monkeypatch, tmp_path):
+def test_a_project_that_cannot_be_installed_puts_both_tools_in_error(monkeypatch, tmp_path):
+    """The install is the shared step's first act. If it fails, neither mypy nor
+    pytest ran, and neither may be reported as anything but an error."""
     output = "ERROR: Could not find a version that satisfies the requirement nonexistent>=9"
-    report = _report(monkeypatch, tmp_path, pytest=(output, 90))
+    report = _report(monkeypatch, tmp_path, combined=(output, 90))
 
+    assert report.mypy["status"] == ERROR
     assert report.pytest["status"] == ERROR
+    assert "pip install" in report.mypy["error"]
     assert "pip install" in report.pytest["error"]
     assert report.passed is False
+
+
+def test_a_step_that_died_before_pytest_leaves_pytest_in_error(monkeypatch, tmp_path):
+    """A container killed mid-step prints mypy's section and never closes pytest's.
+    Mypy's verdict stands; pytest's absence is an error, not a silent pass."""
+    partial, _ = _combined(_MYPY_CLEAN, ("", 0))
+    truncated = partial.split("##DEVFACTORY:PYTEST##")[0] + "\n[timed out after 300s]"
+    report = _report(monkeypatch, tmp_path, combined=(truncated, -1))
+
+    assert report.mypy["status"] == CLEAN
+    assert report.pytest["status"] == ERROR
+    assert "did not finish in time" in report.pytest["error"]
+    assert report.passed is False
+
+
+# ── The shared mypy + pytest step ────────────────────────────────────────────
+
+
+def test_mypy_and_pytest_exit_codes_are_read_independently(monkeypatch, tmp_path):
+    """One container, two verdicts: mypy's findings must not colour pytest's
+    result, and the step's own exit code is pytest's alone."""
+    mypy_out = "a.py:3: error: Incompatible return value type  [return-value]\nFound 1 error"
+    report = _report(monkeypatch, tmp_path, mypy=(mypy_out, 1), pytest=_PYTEST_CLEAN)
+
+    assert report.mypy["status"] == FINDINGS
+    assert report.mypy["returncode"] == 1
+    assert report.pytest["status"] == CLEAN
+    assert report.pytest["returncode"] == 0
+    assert report.pytest["passed"] == 4
+    assert report.passed is False
+
+
+def test_neither_tools_output_leaks_into_the_others_section(monkeypatch, tmp_path):
+    """The markers, not proximity, decide what belongs to whom — a pytest failure
+    line must not be counted as a mypy error, nor the reverse."""
+    pytest_out = "FAILED tests/test_a.py::test_x - error: boom\n1 failed, 3 passed in 0.20s"
+    report = _report(monkeypatch, tmp_path, pytest=(pytest_out, 1))
+
+    assert report.mypy["status"] == CLEAN
+    assert report.mypy["errors"] == []
+    assert report.pytest["failed"] == 1
+    assert "FAILED" not in report.mypy["raw"]
 
 
 def test_a_timed_out_container_is_an_error_not_a_crash(monkeypatch, tmp_path):
