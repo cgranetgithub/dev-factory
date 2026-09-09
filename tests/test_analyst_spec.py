@@ -24,7 +24,6 @@ def _spec(summary="do the thing", criteria=("it works",)) -> TaskSpec:
         files_to_modify=["a.py"],
         test_strategy="pytest",
         tech_notes="",
-        raw="{}",
     )
 
 
@@ -141,7 +140,7 @@ def test_an_unusable_answer_is_retried_with_the_reason(monkeypatch, tmp_path):
 
     ctx = agent.run(_ctx())
 
-    assert ctx.task_spec is not None
+    assert ctx.spec_issue_number == 42
     assert "no acceptance criteria" in seen["prompts"][1]
 
 

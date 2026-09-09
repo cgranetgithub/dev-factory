@@ -1,9 +1,11 @@
 """
-Publish the analyst's specification as a GitHub issue of its own.
+The analyst's specification, as a GitHub issue of its own.
 
 The specification used to live in a Python object that existed until the process
 exited. Publishing it makes it something a human can read, amend and cite — and
-something the next stage can fetch on its own rather than be handed.
+something the next stage fetches on its own rather than is handed. Both directions
+live here: :func:`publish_spec` writes the issue, :func:`spec_for` reads it back.
+The issue is the specification; nothing in memory is.
 
 An issue rather than a comment, because GitHub versions the edits, it is a
 first-class object with its own labels and discussion, and it can be corrected
@@ -14,8 +16,9 @@ before development starts. It costs a second issue per task, which the
 from __future__ import annotations
 
 import logging
+import re
 
-from devfactory.context import TaskSpec
+from devfactory.context import PipelineContext, TaskSpec
 from devfactory.github.client import gh
 from devfactory.github.issues import LABEL_SPEC, _ensure_labels
 
@@ -24,6 +27,25 @@ logger = logging.getLogger(__name__)
 # Written into the body so a spec issue can be found again without relying on its
 # title, which a human may well rewrite.
 _MARKER = "<!-- devfactory:spec-for:{number} -->"
+
+# The body is read back by these headings, so they are the contract between the
+# writer and the readers. A human amending the issue keeps them; anything under a
+# heading not listed here is ignored rather than misfiled.
+_SECTIONS = {
+    "summary": "summary",
+    "acceptance criteria": "acceptance_criteria",
+    "files to create": "files_to_create",
+    "files to modify": "files_to_modify",
+    "test strategy": "test_strategy",
+    "technical notes": "tech_notes",
+}
+_HEADING = re.compile(r"^##\s+(.+?)\s*$")
+# A list item, with or without a checkbox: "- [ ] text", "- [x] text", "* text".
+_ITEM = re.compile(r"^\s*[-*]\s+(?:\[[ xX]\]\s*)?(.*?)\s*$")
+
+
+class SpecNotPublishedError(RuntimeError):
+    """A stage needs the specification and none has been published for the issue."""
 
 
 def publish_spec(repo: str, issue_number: int, issue_title: str, spec: TaskSpec) -> int:
@@ -71,13 +93,80 @@ def find_spec_issue(repo: str, issue_number: int):
     return None
 
 
+def spec_for(ctx: PipelineContext) -> TaskSpec:
+    """Fetch the specification a run works from — the issue, read now.
+
+    Called by every stage that needs it, each time it needs it. That is the point:
+    an amendment made to the issue between two iterations is what the next
+    iteration builds against, because nothing was kept from the previous one.
+
+    Raises:
+        SpecNotPublishedError: The analyst has not published one. A stage that
+            went on without a specification would work from the issue title.
+    """
+    if ctx.spec_issue_number is None:
+        raise SpecNotPublishedError(
+            f"no specification has been published for issue #{ctx.issue.number}"
+        )
+    return read_spec(ctx.issue.repo, ctx.spec_issue_number)
+
+
+def read_spec(repo: str, spec_issue_number: int) -> TaskSpec:
+    """Read spec issue ``spec_issue_number`` back into a :class:`TaskSpec`."""
+    issue = gh.get_repo(repo).get_issue(spec_issue_number)
+    return parse_body(issue.body or "")
+
+
+def parse_body(body: str) -> TaskSpec:
+    """The inverse of :func:`_build_body`, tolerant of a human's edits.
+
+    Sections are found by heading; prose is kept as written, lists are read item
+    by item with any checkbox and backticks stripped. A section that is missing
+    is empty, not an error — the analyst's own output can leave one out.
+    """
+    sections: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in body.splitlines():
+        heading = _HEADING.match(line)
+        if heading:
+            current = _SECTIONS.get(heading.group(1).lower())
+            if current is not None:
+                sections.setdefault(current, [])
+            continue
+        if current is not None:
+            sections[current].append(line)
+
+    return TaskSpec(
+        summary=_text(sections.get("summary", [])),
+        acceptance_criteria=_items(sections.get("acceptance_criteria", [])),
+        files_to_create=_items(sections.get("files_to_create", [])),
+        files_to_modify=_items(sections.get("files_to_modify", [])),
+        test_strategy=_text(sections.get("test_strategy", [])),
+        tech_notes=_text(sections.get("tech_notes", [])),
+    )
+
+
+def _text(lines: list[str]) -> str:
+    return "\n".join(lines).strip()
+
+
+def _items(lines: list[str]) -> list[str]:
+    items = []
+    for line in lines:
+        match = _ITEM.match(line)
+        if match and match.group(1):
+            items.append(match.group(1).strip("`"))
+    return items
+
+
 def _build_body(issue_number: int, spec: TaskSpec) -> str:
     lines = [
         _MARKER.format(number=issue_number),
         f"Implements #{issue_number}",
         "",
         "> Written by the DevFactory analyst, which read the codebase to produce it.",
-        "> Amend it if it is wrong — the developer works from this, not from a guess.",
+        "> Amend it if it is wrong — the developer and the reviewer read it from here,",
+        "> each time they need it. Keep the section headings: that is how they read it.",
         "",
         "## Summary",
         "",

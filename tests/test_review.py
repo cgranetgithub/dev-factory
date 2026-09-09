@@ -231,7 +231,6 @@ def test_post_review_success():
         issue=mock.MagicMock(),
         pr_number=123,
         diff="",
-        task_spec=None,
         verification_report=None,
         review_results=[],
     )
@@ -272,7 +271,6 @@ def test_post_review_fallback_to_issue_comment():
         issue=mock.MagicMock(),
         pr_number=123,
         diff="",
-        task_spec=None,
         verification_report=None,
         review_results=[],
     )
@@ -313,7 +311,6 @@ def test_post_review_verdict_mapping():
         issue=mock.MagicMock(),
         pr_number=123,
         diff="",
-        task_spec=None,
         verification_report=None,
         review_results=[],
     )

@@ -16,6 +16,7 @@ import git
 from github import GithubException
 
 from devfactory.context import PipelineContext
+from devfactory.github import spec_issue
 from devfactory.github.client import gh
 from devfactory.github.git_ops import default_branch, workspace_path
 
@@ -84,24 +85,24 @@ def _arm_auto_merge(pr) -> None:
 
 def _build_pr_body(ctx: PipelineContext) -> str:
     """Build a structured PR description."""
-    spec = ctx.task_spec
+    # The criteria are copied here as checkboxes for the approver's benefit; the
+    # specification itself stays in its issue, cited just above them.
+    spec = spec_issue.spec_for(ctx)
     lines = [
         f"## {ctx.issue.title}",
         "",
         f"Closes #{ctx.issue.number}",
         "",
-    ]
-    if ctx.spec_issue_number:
-        lines += [f"Built from the specification in #{ctx.spec_issue_number}.", ""]
-    lines += [
+        f"Built from the specification in #{ctx.spec_issue_number}.",
+        "",
         "---",
         "",
         "### Summary",
-        spec.summary if spec else "_No task spec available_",
+        spec.summary,
         "",
     ]
 
-    if spec and spec.acceptance_criteria:
+    if spec.acceptance_criteria:
         lines += ["### Acceptance Criteria", ""]
         for criterion in spec.acceptance_criteria:
             lines.append(f"- [ ] {criterion}")

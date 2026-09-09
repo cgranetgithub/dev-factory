@@ -19,7 +19,7 @@ from devfactory import opencode
 from devfactory.agents.base import BaseAgent
 from devfactory.config import settings
 from devfactory.context import PipelineContext, ReviewResult
-from devfactory.github import git_ops
+from devfactory.github import git_ops, spec_issue
 
 logger = logging.getLogger(__name__)
 
@@ -78,20 +78,19 @@ class ReviewerAgent(BaseAgent):
         ]
 
         parts.append(f"## The request\nIssue #{ctx.issue.number}: {ctx.issue.body or ''}\n")
-        if ctx.spec_issue_number:
-            parts.append(
-                f"The specification is issue #{ctx.spec_issue_number}, and the "
-                f"acceptance criteria below come from it.\n"
-            )
+        parts.append(
+            f"The specification is issue #{ctx.spec_issue_number}, and the "
+            f"acceptance criteria below come from it.\n"
+        )
 
         # The acceptance criteria are the point of the review. Verification already
         # decided that the code is well-formed and its tests pass; what no automated
         # check can answer is whether the change actually does what was asked.
-        if ctx.task_spec:
-            parts.append(f"## What was asked\n{ctx.task_spec.summary}\n")
-            if ctx.task_spec.acceptance_criteria:
-                criteria = "\n".join(f"- {c}" for c in ctx.task_spec.acceptance_criteria)
-                parts.append(f"## Acceptance criteria\n{criteria}\n")
+        spec = spec_issue.spec_for(ctx)
+        parts.append(f"## What was asked\n{spec.summary}\n")
+        if spec.acceptance_criteria:
+            criteria = "\n".join(f"- {c}" for c in spec.acceptance_criteria)
+            parts.append(f"## Acceptance criteria\n{criteria}\n")
 
         if ctx.verification_report:
             parts.append(f"## Verification Report\n{ctx.verification_report.summary}\n")

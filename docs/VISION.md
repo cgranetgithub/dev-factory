@@ -71,7 +71,7 @@ already fall out of its shape. The gap is evidence and formalisation, not a new 
 | Separation of duties | The reviewer cannot approve its own PR (GitHub returns 422) | Have | Document it as a control; keep an independent, competent human approver |
 | Human sign-off | The repository owner is the sole merger — the accountable authority | Partial | Capture who approved what, when, against which criteria |
 | Data residency | 100% local models via Ollama — nothing sent to a third party | Have | Write it up; it is the confidentiality and IP story |
-| Requirement traceability | `TaskSpec.acceptance_criteria` extracted from the issue | Build | Verified links: issue → requirement → code → test → verification result |
+| Requirement traceability | Acceptance criteria in the spec issue, cited by the PR | Build | Verified links: issue → requirement → code → test → verification result |
 | Risk management | — | Build | ISO 14971 risk register, per-change classification, linked to requirements |
 
 The reviewer 422 deserves a note: an agent posting as the PR author cannot formally

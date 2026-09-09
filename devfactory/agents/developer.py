@@ -8,7 +8,9 @@ kept because the agentic loop appeared not to work. That appearance was a
 measurement error (the context window was 4096), and a single-shot rewrite deletes
 code it was never asked to touch.
 
-On a send-back, the prompt carries the feedback from whichever gate refused.
+It works from the spec issue, fetched when the prompt is built — not from a copy
+made when the analyst ran. On a send-back, the prompt carries the feedback from
+whichever gate refused.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from devfactory import opencode
 from devfactory.agents.base import BaseAgent
 from devfactory.config import settings
 from devfactory.context import PipelineContext
+from devfactory.github import spec_issue
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +58,7 @@ class DeveloperAgent(BaseAgent):
 
     def _build_prompt(self, ctx: PipelineContext) -> str:
         """The task, the specification, and the feedback from whichever gate refused."""
-        spec = ctx.task_spec
-        assert spec is not None
+        spec = spec_issue.spec_for(ctx)
 
         parts = [
             self.load_prompt("developer_opencode.md"),

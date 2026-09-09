@@ -49,7 +49,6 @@ def test_task_spec_fields():
         files_to_modify=[],
         test_strategy="pytest",
         tech_notes="use stdlib only",
-        raw="...",
     )
     assert len(spec.acceptance_criteria) == 2
     assert spec.files_to_create == ["x.py"]
