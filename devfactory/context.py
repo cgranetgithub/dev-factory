@@ -1,6 +1,11 @@
 """
-PipelineContext — shared state object passed between all agents in a pipeline run.
-One instance per issue processed.
+PipelineContext — one run's working state.
+
+One instance per issue. Under the autonomy rule this is orchestration state and a
+mirror of the graph's counters — not a channel between agents. What an agent
+produces is published (the spec as an issue, the code as commits, the review on
+the pull request); the fields below that still carry agent output are the last
+in-memory hand-off, tracked in #72.
 """
 
 from __future__ import annotations
@@ -50,7 +55,7 @@ class ReviewResult:
     verdict: str  # "approved" | "changes_requested" | "commented"
     summary: str
     inline_comments: list[dict]  # [{"path": str, "line": int, "body": str}]
-    score: float  # 0.0–1.0 quality score assigned by scorer
+    score: float  # 0.0–1.0, the reviewer's own estimate of the change's quality
 
 
 @dataclass
@@ -63,7 +68,7 @@ class PipelineContext:
     commits: list[str] = field(default_factory=list)
     pr_url: str | None = None
     pr_number: int | None = None
-    diff: str = ""  # populated by orchestrator after push, injected into reviewer
+    diff: str = ""  # branch vs base, refreshed before each review
 
     # Agent outputs
     task_spec: TaskSpec | None = None
@@ -93,8 +98,9 @@ class PipelineContext:
     # and then score the tidied result — the developer's own hygiene must stay
     # visible. None means the measurement could not be taken.
     lint_left_behind: list[int | None] = field(default_factory=list)
+    # {"analyst": "gemma4:26b", "developer": "qwen3-coder:30b", ...} — what the
+    # reviewer reads to avoid the developer's model.
     model_assignments: dict[str, str] = field(default_factory=dict)
-    # {"analyst": "qwen2.5-coder:14b", "developer": "deepseek-coder-v2:16b", ...}
 
     # Execution log (for KB scoring)
     execution_log: list[dict[str, Any]] = field(default_factory=list)

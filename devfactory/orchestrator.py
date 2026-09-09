@@ -147,7 +147,7 @@ class Pipeline:
             # The "verification_failed" status was already set inside the Dev↔Verification loop;
             # do not overwrite it with "error". The poller applies the right label.
             logger.warning(f"[pipeline] Verification failed on #{issue.number} (retries exhausted)")
-            self._mark(issues.mark_qa_failed, issue.repo, issue.number, str(e))
+            self._mark(issues.mark_verification_failed, issue.repo, issue.number, str(e))
             raise
 
         except Exception as e:

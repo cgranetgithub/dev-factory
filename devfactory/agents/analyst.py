@@ -1,5 +1,10 @@
 """
-Analyst Agent — reads a GitHub issue and produces a structured TaskSpec.
+Analyst Agent — turns a request into a specification a developer can implement.
+
+It reads the request *and the codebase*, through the harness in read-only mode,
+and publishes what it decides as a GitHub issue linked to the original. A request
+often names a symptom; the specification has to name the file, the function and
+the correct behaviour, and only reading the code can supply those.
 """
 
 from __future__ import annotations
@@ -19,12 +24,6 @@ logger = logging.getLogger(__name__)
 # Three attempts: the failure is usually a model wrapping JSON in prose, which a
 # corrective turn fixes, and a fourth call would cost more than it recovers.
 _MAX_ATTEMPTS = 3
-
-# Generous, because reasoning models spend this budget on their working before they
-# write a single character of the answer. At 4096 a run was observed producing 4096
-# tokens of reasoning and an empty answer: the whole budget went on thinking, and
-# the pipeline saw an empty spec with no idea why.
-_MAX_TOKENS = 8192
 
 
 class AnalystFailedError(RuntimeError):

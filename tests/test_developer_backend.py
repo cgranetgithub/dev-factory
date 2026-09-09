@@ -50,7 +50,7 @@ def _agent_with_model() -> DeveloperAgent:
 
 
 def test_opencode_backend_invokes_cli_and_logs_execution(monkeypatch, tmp_path):
-    """_run_opencode builds the expected command and records a developer execution."""
+    """run() builds the expected harness command and records a developer execution."""
     # The workspace repo must exist (repo_name == "repo").
     monkeypatch.setattr(settings, "workspace", tmp_path)
     (tmp_path / "repo").mkdir()

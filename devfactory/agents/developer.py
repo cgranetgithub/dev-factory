@@ -27,21 +27,14 @@ class DeveloperAgent(BaseAgent):
     role = "developer"
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
-        """Implement the task by editing the workspace repo through OpenCode."""
-        return self._run_opencode(ctx)
+        """Implement the task by editing the workspace repository.
 
-    # ── "opencode" backend — agentic CLI, in-place edits ───────────────────────
-
-    def _run_opencode(self, ctx: PipelineContext) -> PipelineContext:
-        """
-        Delegate implementation to the OpenCode CLI.
-
-        OpenCode runs its own agentic loop (read/search/edit/run) against the
-        selected Ollama model, editing files directly in the workspace repo.
-        We only build the task prompt, invoke the CLI, and record the execution.
+        The harness runs the agentic loop (read/search/edit/run) against the
+        selected model, editing files in place. This builds the task prompt,
+        invokes the harness, and records the execution.
         """
         result = opencode.run(
-            self._build_opencode_prompt(ctx),
+            self._build_prompt(ctx),
             repo_path=settings.workspace / ctx.repo_name,
             model_name=self.model.name,
             read_only=False,
@@ -60,8 +53,8 @@ class DeveloperAgent(BaseAgent):
         )
         return ctx
 
-    def _build_opencode_prompt(self, ctx: PipelineContext) -> str:
-        """Build the task prompt for OpenCode (no file-block format — it edits itself)."""
+    def _build_prompt(self, ctx: PipelineContext) -> str:
+        """The task, the specification, and the feedback from whichever gate refused."""
         spec = ctx.task_spec
         assert spec is not None
 

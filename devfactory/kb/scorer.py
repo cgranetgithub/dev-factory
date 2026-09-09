@@ -43,11 +43,15 @@ class Scorer:
             self._score_reviewer(exec_id, ctx)
         elif agent == "developer":
             self._score_developer_quality(exec_id, ctx)
+            # Iterations across all three gates: the budget is shared, and a change
+            # sent back by the reviewer cost an iteration just as a failed
+            # verification did.
             self._db.record_score(
                 exec_id,
                 "retry_count",
-                ctx.verification_attempts,
-                f"Verification retries: {ctx.verification_attempts}",
+                ctx.iterations_used,
+                f"iterations: {ctx.verification_attempts} verification, "
+                f"{ctx.scope_rejections} scope, {ctx.review_rejections} review",
             )
 
     def _score_developer_quality(self, exec_id: int, ctx: PipelineContext):
