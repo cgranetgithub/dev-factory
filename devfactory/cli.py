@@ -10,6 +10,8 @@ from rich.console import Console
 from rich.table import Table
 
 app = typer.Typer(name="devfactory", help="Local AI software factory")
+controls_app = typer.Typer(help="Verify the repository controls and record the evidence")
+app.add_typer(controls_app, name="controls")
 console = Console()
 
 
@@ -176,6 +178,72 @@ def logs(
     from devfactory.kb.dashboard import print_run_logs
 
     print_run_logs(issue_number=issue, last_only=last)
+
+
+@controls_app.command("check")
+def controls_check(
+    repo: str = typer.Option(..., "--repo", "-r", help="GitHub repo (owner/repo)"),
+    as_json: bool = typer.Option(
+        False, "--json", help="Print the canonical snapshot and the drift as JSON"
+    ),
+):
+    """Snapshot the enforced branch protections, record them, report any drift.
+
+    Exit codes: 0 no drift, 1 drift detected, 2 the configuration could not be read.
+    """
+    import json
+
+    from devfactory.controls import SnapshotError, check_repository, flatten, format_change
+
+    try:
+        check = check_repository(repo)
+    except SnapshotError as exc:
+        # Exit 2, not 1: "we could not look" must never be reported as "nothing moved",
+        # and an unreadable API is not a drift finding.
+        console.print(f"[bold red]✗ Could not read the controls:[/] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    if as_json:
+        console.print_json(
+            json.dumps(
+                {
+                    "repo": check.repo,
+                    "taken_at": check.taken_at,
+                    "sha256": check.sha256,
+                    "snapshot_id": check.snapshot_id,
+                    "baseline": check.baseline,
+                    "snapshot": check.snapshot,
+                    "drift": check.changes,
+                }
+            )
+        )
+        raise typer.Exit(code=1 if check.drifted else 0)
+
+    table = Table(title=f"Controls — {check.repo} @ {check.taken_at}", show_lines=False)
+    # Settings are keyed by the same dotted paths the drift below uses, so a reader
+    # can match a reported change to the line it came from without a translation.
+    table.add_column("Setting", style="cyan", overflow="fold", ratio=3)
+    table.add_column("Value", overflow="fold", ratio=2)
+    for path, value in sorted(flatten(check.snapshot).items()):
+        table.add_row(path, str(value))
+    console.print(table)
+    console.print(f"[dim]sha256 {check.sha256} · record #{check.snapshot_id}[/]")
+
+    if check.baseline:
+        console.print("[bold green]✓ Baseline recorded[/] — nothing to compare against yet")
+        raise typer.Exit(code=0)
+
+    if not check.changes:
+        console.print(f"[bold green]✓ No drift[/] since {check.previous_taken_at}")
+        raise typer.Exit(code=0)
+
+    console.print(
+        f"\n[bold yellow]⚠ {len(check.changes)} control change(s)[/] "
+        f"since {check.previous_taken_at}:"
+    )
+    for change in check.changes:
+        console.print(f"  [yellow]•[/] {format_change(change)}")
+    raise typer.Exit(code=1)
 
 
 def _sync_models(available: set[str]) -> set[str]:
