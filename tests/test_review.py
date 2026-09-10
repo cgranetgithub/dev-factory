@@ -64,12 +64,12 @@ def test_build_diff_position_map_multiple_hunks():
 
     mock_file = mock.MagicMock()
     mock_file.filename = "test.py"
-    mock_file.patch = """@@ -1,3 +1,4 @@
+    mock_file.patch = """@@ -1,3 +1,3 @@
  line1
 -line2
 +line2 modified
  line3
-@@ -10,3 +11,4 @@
+@@ -10,3 +11,3 @@
  line10
 -line11
 +line11 modified
@@ -117,7 +117,7 @@ def test_build_diff_position_map_handles_missing_lines():
 
     mock_file = mock.MagicMock()
     mock_file.filename = "test.py"
-    mock_file.patch = """@@ -1,3 +1,4 @@
+    mock_file.patch = """@@ -1,3 +1,3 @@
  line1
 -line2
 +line2 modified
@@ -133,6 +133,61 @@ def test_build_diff_position_map_handles_missing_lines():
     line_map = result["test.py"]
     # Line 20 doesn't exist in the diff
     assert line_map.get(20) is None
+
+
+def _map_for(patch):
+    """Run _build_diff_position_map over a single file carrying `patch`."""
+    mock_file = mock.MagicMock()
+    mock_file.filename = "test.py"
+    mock_file.patch = patch
+
+    mock_pr = mock.MagicMock()
+    mock_pr.get_files.return_value = [mock_file]
+
+    return _build_diff_position_map(mock_pr)
+
+
+def test_build_diff_position_map_ignores_the_no_newline_marker():
+    """`\\ No newline at end of file` is a note about the file, not a line of it.
+    Counting it as a context line invented a line 4 that does not exist and pointed
+    it at the marker's own position — a comment there would land on nothing."""
+    line_map = _map_for(
+        "@@ -1,3 +1,3 @@\n x\n-y\n+Y\n z\n\\ No newline at end of file\n",
+    )["test.py"]
+
+    assert line_map == {1: 2, 2: 4, 3: 5}
+
+
+def test_build_diff_position_map_with_the_marker_in_the_middle_of_a_hunk():
+    """When the *removed* side is the one without a trailing newline, git emits the
+    marker between the `-` and `+` lines, so it shifts every position after it."""
+    line_map = _map_for(
+        "@@ -1,2 +1,3 @@\n x\n-y\n\\ No newline at end of file\n+Y\n+z\n",
+    )["test.py"]
+
+    assert line_map == {1: 2, 2: 5, 3: 6}
+
+
+def test_build_diff_position_map_skips_renames_and_binary_files():
+    """GitHub sends no patch for a pure rename or a binary change, so there is
+    nothing to map — and nothing that should raise on the way past."""
+    rename = mock.MagicMock()
+    rename.filename = "newname.py"
+    rename.patch = None
+
+    binary = mock.MagicMock()
+    binary.filename = "img.png"
+    binary.patch = None
+
+    mock_pr = mock.MagicMock()
+    mock_pr.get_files.return_value = [rename, binary]
+
+    assert _build_diff_position_map(mock_pr) == {}
+
+
+def test_build_diff_position_map_drops_a_patch_it_cannot_parse():
+    """A malformed patch loses its inline comments; it must not lose the review."""
+    assert _map_for("@@ this is not a hunk header @@\n+x\n") == {}
 
 
 def test_build_review_body():

@@ -9,6 +9,8 @@ from typing import Any
 
 from github import GithubException
 from github.PullRequest import PullRequest
+from unidiff import PatchSet
+from unidiff.errors import UnidiffParseError
 
 from devfactory.context import PipelineContext, ReviewResult
 from devfactory.github.client import gh
@@ -119,33 +121,59 @@ def _build_diff_position_map(pr: PullRequest) -> dict[str, dict[int, int]]:
     result: dict[str, dict[int, int]] = {}
 
     for f in pr.get_files():
-        path = f.filename
         patch = f.patch
         if not patch:
+            # Binary files and pure renames carry no patch, so they have no
+            # positions to comment on.
             continue
 
-        line_map: dict[int, int] = {}
-        diff_position = 0
-        current_line = 0
-
-        for diff_line in patch.splitlines():
-            diff_position += 1
-            if diff_line.startswith("@@"):
-                # Parse hunk header: @@ -old_start,old_count +new_start,new_count @@
-                import re
-
-                m = re.search(r"\+(\d+)", diff_line)
-                if m:
-                    current_line = int(m.group(1)) - 1
-            elif diff_line.startswith("-"):
-                pass  # removed line, don't increment new line counter
-            elif diff_line.startswith("+"):
-                current_line += 1
-                line_map[current_line] = diff_position
-            else:
-                current_line += 1  # context line
-                line_map[current_line] = diff_position
-
-        result[path] = line_map
+        line_map = _positions_in_patch(f.filename, patch)
+        if line_map is not None:
+            result[f.filename] = line_map
 
     return result
+
+
+def _positions_in_patch(path: str, patch: str) -> dict[int, int] | None:
+    """
+    Map new-file line numbers onto review positions for one file's patch.
+
+    A review `position` counts every line of that file's patch — hunk headers,
+    context, additions and removals alike — starting at 1 on the file's first `@@`
+    and not resetting between its hunks.
+
+    Args:
+        path: The file path, used only for logging.
+        patch: The per-file patch as GitHub returns it, starting at the first `@@`.
+
+    Returns:
+        {new_file_line_number: review_position}, or None if the patch has no hunks
+        or cannot be parsed.
+    """
+    # GitHub hands out the patch body alone: no `diff --git`, no `---`/`+++` lines.
+    # unidiff needs a file header to know a file has begun, so put a synthetic pair
+    # back. The names in it are never read — only the hunk geometry below them is.
+    try:
+        patched_file = PatchSet("--- a/f\n+++ b/f\n" + patch)[0]
+    except (UnidiffParseError, IndexError) as e:
+        logger.warning(f"[review] could not parse the patch for {path} ({e})")
+        return None
+
+    if not patched_file or not patched_file[0] or patched_file[0][0].diff_line_no is None:
+        return None
+
+    # unidiff numbers lines from the start of what it parsed — the synthetic header
+    # included — so rebase onto the first `@@`. Hunk itself carries no line number,
+    # so take it from the line just below the header.
+    first_header = patched_file[0][0].diff_line_no - 1
+
+    line_map: dict[int, int] = {}
+    for hunk in patched_file:
+        for line in hunk:
+            # Removed lines and the `\ No newline at end of file` marker have no
+            # line in the new file; the marker is why this used to be wrong.
+            if line.target_line_no is None or line.diff_line_no is None:
+                continue
+            line_map[line.target_line_no] = line.diff_line_no - first_header + 1
+
+    return line_map
