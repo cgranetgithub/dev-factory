@@ -8,7 +8,9 @@
 # `main` ruleset, "Verification passed" stops being a self-assertion.
 #
 # Keep the tool invocations below aligned with `devfactory/verification/runner.py`:
-#   - Python 3.11 matches `docker/Dockerfile.test`
+#   - Python 3.11 is this project's own floor (`requires-python`), which is also
+#     what the gate resolves for it: since issue #92 the verification image pins
+#     no interpreter at all, and the target repository decides
 #   - bandit uses `-ll` (medium and above), matching the runner's pass rule,
 #     which fails only on MEDIUM or HIGH findings
 #   - mypy and pytest run over a copy of the checkout with the project installed,
@@ -72,8 +74,9 @@ jobs:
         run: pytest -q
 
   # Single-version on purpose, unlike the job above: this exists to test the image
-  # the factory actually uses, and that image is pinned to 3.11 by
-  # docker/Dockerfile.test. A matrix here would test something the factory never runs.
+  # the factory actually uses, on the interpreter the gate resolves for *this*
+  # repository — 3.11, from its own `requires-python`. A matrix here would test
+  # something the factory never runs.
   #
   # The factory runs its gate inside docker/Dockerfile.test, which is a thinner
   # environment than this runner: it has no git binary until we install one, no
@@ -95,16 +98,27 @@ jobs:
         run: docker build -t devfactory-test:latest -f docker/Dockerfile.test .
 
       # Mirrors VerificationRunner._run_over_installed_copy: one copy at /build,
-      # one install, then mypy and pytest over it. The `rm -rf build` is part of
-      # the mirror, not housekeeping: setuptools builds in-tree, and the ./build/lib
-      # it leaves behind makes mypy report a duplicate module instead of checking.
+      # one install, then mypy and pytest over it. The commands below are the ones
+      # `resolve_environment` derives for this repository — python 3.11 from
+      # `requires-python`, the `dev` extra, installed editable — so if that
+      # resolution changes, this has to change with it.
+      #
+      # The `rm -rf build` is part of the mirror, not housekeeping: setuptools
+      # builds in-tree, and the ./build/lib it leaves behind makes mypy report a
+      # duplicate module instead of checking. `--python-executable` is the other
+      # half of the mirror: mypy is the image's, the site-packages it reads are the
+      # target's.
       - name: Type-check and test inside it, as the factory does
         run: |
-          docker run --rm -v "$PWD:/workspace:ro" -w /workspace devfactory-test:latest sh -c '
+          docker run --rm -v "$PWD:/workspace:ro" -w /workspace devfactory-test:latest sh -c "
             set -e   # without it the step would exit with pytest status alone, hiding mypy
             mkdir -p /build; cp -r /workspace/. /build/; cd /build
-            pip install -q . || { echo "project install failed"; exit 1; }
+            export VIRTUAL_ENV=/build/.venv
+            uv python install 3.11
+            uv venv --python 3.11 /build/.venv
+            uv pip install -e '.[dev]'
             rm -rf build
-            mypy . --ignore-missing-imports --cache-dir=/tmp/mypy_cache
-            pytest --tb=short -q
-          '
+            mypy . --ignore-missing-imports --cache-dir=/tmp/mypy_cache \
+              --python-executable /build/.venv/bin/python
+            /build/.venv/bin/pytest --tb=short
+          "

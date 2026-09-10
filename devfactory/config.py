@@ -38,6 +38,8 @@ class Settings(BaseSettings):
     Docker:
         DOCKER_TEST_IMAGE   Name of the pre-built test image (devfactory-test:latest).
         OLLAMA_TIMEOUT_S    Seconds before an Ollama API call times out (default: 300).
+        DEVFACTORY_VERIFICATION_TIMEOUT_S  Seconds before the mypy+pytest container
+                            is killed (default: 600).
     """
 
     model_config = SettingsConfigDict(
@@ -86,6 +88,13 @@ class Settings(BaseSettings):
 
     # Docker
     docker_test_image: str = Field(default="devfactory-test:latest", alias="DOCKER_TEST_IMAGE")
+    # The shared mypy + pytest container builds the target's environment before it
+    # can check anything, so its deadline covers an install as well as a test run.
+    # Measured on the two target repositories: 8s and 16s end to end. The ceiling is
+    # for the repository we have not met yet — a large dependency tree fetched cold —
+    # and it is a setting because "the tests did not finish" must stay a reported
+    # verdict rather than something a bigger target trips by surprise.
+    verification_timeout_s: int = Field(default=600, alias="DEVFACTORY_VERIFICATION_TIMEOUT_S")
 
 
 # Singleton — import this everywhere

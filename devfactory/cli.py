@@ -5,6 +5,8 @@ Usage: devfactory <command> [options]
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -12,6 +14,8 @@ from rich.table import Table
 app = typer.Typer(name="devfactory", help="Local AI software factory")
 controls_app = typer.Typer(help="Verify the repository controls and record the evidence")
 app.add_typer(controls_app, name="controls")
+gate_app = typer.Typer(help="Run the verification gate outside a pipeline run")
+app.add_typer(gate_app, name="gate")
 console = Console()
 
 
@@ -162,11 +166,20 @@ def models(
 def init(
     repo: str = typer.Option(..., "--repo", "-r", help="GitHub repo (owner/repo)"),
 ):
-    """Setup DevFactory: create GitHub labels, build Docker image, check Ollama."""
+    """Setup DevFactory for a repository, and check the repository is usable.
+
+    Creates the GitHub labels, builds the verification image, provisions the
+    models, initialises the knowledge base, and finishes with a dry run of the
+    gate on the repository's default branch.
+
+    Exit codes: 0 ready, 1 the target's own gate fails, 2 the gate could not run.
+    Both non-zero cases mean the factory would fail at verification on every
+    issue, so init refuses to call itself complete.
+    """
     from devfactory.logging_setup import setup_logging
 
     setup_logging()
-    _run_init(repo)
+    raise typer.Exit(code=_run_init(repo))
 
 
 @app.command()
@@ -246,6 +259,90 @@ def controls_check(
     raise typer.Exit(code=1)
 
 
+@gate_app.command("check")
+def gate_check(
+    repo: str = typer.Option(..., "--repo", "-r", help="GitHub repo (owner/repo)"),
+    path: str = typer.Option(
+        "",
+        "--path",
+        help="Verify this checkout instead of cloning the repository. The "
+        "--repo slug still selects the verification profile.",
+    ),
+):
+    """Run the full gate on a repository's default branch, tool by tool.
+
+    Onboarding check: a repository whose default branch fails its own gate cannot
+    be processed by the factory, because every run would fail at verification
+    whatever the developer produced.
+
+    Exit codes: 0 the gate passes, 1 the target's own suite fails, 2 the gate
+    itself could not run.
+    """
+    from devfactory.logging_setup import setup_logging
+
+    setup_logging()
+    raise typer.Exit(code=_gate_dry_run(repo, Path(path) if path else None))
+
+
+def _gate_dry_run(repo: str, path: Path | None = None) -> int:
+    """Run the gate dry run and print it. Returns the exit code it deserves.
+
+    Shared by ``devfactory gate check`` and ``devfactory init``, which both need
+    the same verdict printed the same way — one before onboarding, one as part of
+    it.
+    """
+    from devfactory.verification.dry_run import dry_run
+
+    console.print(f"\n[bold]Gate dry run on {repo}[/] (this builds the target's environment)")
+    try:
+        result = dry_run(repo, path)
+    except (OSError, ValueError, RuntimeError) as exc:
+        # Includes the clone failing, a path that is not a directory and a
+        # malformed profile. None of them is a verdict on the repository.
+        console.print(f"   [bold red]✗ The gate could not run:[/] {exc}")
+        return 2
+
+    table = Table(title=f"{repo} @ {result.commit[:8]} ({result.branch})", show_lines=False)
+    table.add_column("Tool", style="cyan")
+    table.add_column("Result")
+    table.add_column("Detail", overflow="fold")
+    for outcome in result.outcomes:
+        marker = {
+            "clean": "[green]✓ pass[/]",
+            "findings": "[yellow]✗ findings[/]",
+            "error": "[red]✗ did not run[/]",
+            "skipped": "[dim]— skipped[/]",
+        }[outcome.status]
+        table.add_row(outcome.name, marker, outcome.detail)
+    console.print(table)
+    console.print(f"[dim]{result.environment.describe()} · {result.duration_s:.1f}s[/]")
+
+    # The two failure modes are printed apart because the reader's next action is
+    # not the same: one is a bug or a missing declaration on our side, the other
+    # is work in the target repository.
+    if result.gate_failures:
+        names = ", ".join(o.name for o in result.gate_failures)
+        console.print(f"\n[bold red]✗ The gate could not run ({names}).[/]")
+        console.print("[dim]Our problem, or a declaration missing from the target:[/]")
+        for outcome in result.gate_failures:
+            console.print(f"  [red]•[/] {outcome.name}: {outcome.detail}")
+        return 2
+
+    if result.target_failures:
+        names = ", ".join(o.name for o in result.target_failures)
+        console.print(f"\n[bold yellow]✗ {repo} does not pass its own gate ({names}).[/]")
+        console.print(
+            "[dim]The target's problem: the factory cannot open a pull request on a "
+            "branch whose base already fails. Fix it in the target, or record a "
+            "per-repository decision in profiles/verification.toml — see "
+            "docs/onboarding.md.[/]"
+        )
+        return 1
+
+    console.print(f"\n[bold green]✓ {repo} passes its own gate.[/]")
+    return 0
+
+
 def _sync_models(available: set[str]) -> set[str]:
     """Pull every registered model that Ollama does not have yet.
 
@@ -269,7 +366,7 @@ def _sync_models(available: set[str]) -> set[str]:
         return available | set(pulled)
 
 
-def _run_init(repo: str):
+def _run_init(repo: str) -> int:
     import subprocess
 
     from devfactory.github.issues import _ensure_labels
@@ -325,8 +422,19 @@ def _run_init(repo: str):
     db._ensure_db()
     console.print(f"   [green]✓ DB ready at {db.path}[/]")
 
+    # 5. The gate, on the repository as it stands. Last because it needs the image
+    # built above, and because it is the step that decides whether the other four
+    # were worth doing: a repository whose default branch fails its own gate
+    # cannot be processed at all (issue #92).
+    console.print("\n[bold]5. Dry run of the verification gate on the default branch...[/]")
+    code = _gate_dry_run(repo)
+    if code != 0:
+        console.print("\n[bold yellow]Init incomplete[/] — see docs/onboarding.md.")
+        return code
+
     console.print("\n[bold green]Init complete.[/] Run:")
     console.print(f"   devfactory poll --repo {repo}")
+    return 0
 
 
 if __name__ == "__main__":
