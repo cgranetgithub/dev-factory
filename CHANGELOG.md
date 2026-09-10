@@ -7,6 +7,85 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+**The watchdog was the hang**
+
+- The OpenCode startup watchdog added in #78 never detected a hang. It called
+  `communicate(timeout=120)` and then probed the pipes with `select` — but waiting *is*
+  reading, so the timed-out call had already drained both pipes and the probe found them
+  empty every time. The 120 seconds was a cap on total runtime, and OpenCode was being
+  killed for being slow. The three "intermittent harness hangs" behind #78 and #88 were
+  this, deterministically; OpenCode writes its bootstrap log half a second after launch
+  and was never the culprit. The verdict now comes from `TimeoutExpired.stdout/.stderr`,
+  where the output actually is
+- A genuine startup hang now costs one retry instead of the whole run: the process is
+  killed and launched once more. Two consecutive hangs raise, and a timeout *after* output
+  has started is not retried — that is real work running long
+- `devfactory run` exits non-zero when the pipeline raised. It returned 0 on a failed run,
+  which cannot be scripted
+
+**A run starts from what the repository contains**
+
+- `git_ops.setup_branch` claimed to reset the workspace and only checked out. A run that
+  died mid-developer left its edits in the tree, and every later run on any issue then
+  died at `git checkout main`. The quieter half is worse: when the checkout did succeed,
+  the leftovers became what the analyst read — one spec issue asserts that a function
+  "already contains a partial implementation" of code that exists in no commit and no
+  repository. Evidence contaminated in silence
+
+**The gate is as careful about itself as about the code**
+
+- mypy runs over the project **with its dependencies installed**. It ran against the bare
+  image, so every third-party import was `Any`: it invented errors that exist only without
+  dependencies — that is how `main` failed its own gate while CI was green — and missed
+  every error that needs them. mypy and pytest now share one prepared copy and one
+  install; measured cost **+2.5s per verification run**, and mypy genuinely does more work
+  once the types resolve
+- CI's `verification-image` job type-checks the same way, so the gate and CI cannot
+  disagree again without a red build
+- `pip install .` builds in-tree, leaving `build/lib/devfactory`, which mypy reads as a
+  duplicate module and reports as "did not run". The install removes it — but only when
+  the install created it
+
+**Unified diffs are parsed, not scanned**
+
+- Both hand-written diff parsers were wrong on input `git diff` really produces.
+  `_build_diff_position_map` counted `\ No newline at end of file` as a context line, so it
+  invented a file line and shifted every position after the marker; `truncate_diff` split
+  on the string `diff --git `, so on a commit that *adds* a `.diff` file it found five
+  sections and reported three omitted files the commit never touched
+- `unidiff` replaces both. It is used as a locator, not a serialiser: file boundaries and
+  paths come from it, the diff text is still sliced from the bytes git wrote. Two things it
+  does not do are handled explicitly — GitHub serves a patch body with no `diff --git`
+  header (one is synthesised before parsing), and it discards the `--stat` preamble that
+  #60 exists to preserve (sliced from the raw text instead)
+- The existing tests' fixtures were corrected: they declared hunk headers whose counts did
+  not match their bodies. Legal to a string scan, never emitted by git, rejected by a parser
+
+**Controls are checked, not declared**
+
+- `devfactory controls check --repo owner/repo` snapshots what GitHub actually enforces on
+  the default branch — rulesets and their parameters, bypass actors, effective branch
+  rules, collaborators and roles, a hash of CODEOWNERS — records it append-only in the
+  knowledge base with a timestamp, and reports drift against the previous snapshot field by
+  field. Exit 1 on drift, 2 when the API cannot be read
+- The series of records *is* the evidence: SOC 2 and ISO 27001 ask whether a control
+  operated throughout the period, which a point-in-time screenshot cannot answer. So the
+  table takes inserts and reads, and has no update or delete
+- Its first real run on this repository found **no `required_status_checks` rule in the
+  ruleset** — CI runs on every pull request but nothing requires it to pass. That is one of
+  the gaps #20 lists, found by the tool rather than by reading settings
+- The documented limit: GitHub's audit-log API is Enterprise-only, so on a personal
+  repository we can show *that* a control changed and *when*, never *by whom*
+
+**Community**
+
+- `SECURITY.md` describes the real threat surface — a repo-scoped token, model-generated
+  code running in a container, third-party issue text reaching a model — and routes private
+  reports through GitHub. `CODE_OF_CONDUCT.md`, issue templates and a pull-request template
+  complete the community profile. The factory-task template is shaped like the issues that
+  actually worked as pipeline input, because for this repository the template is part of
+  the prompt
+
 **The specification is the issue**
 - The developer, the reviewer, the scope gate and the pull request body all fetch the
   specification from its GitHub issue, each time they need it. It was published there and
