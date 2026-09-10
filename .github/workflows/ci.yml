@@ -11,6 +11,9 @@
 #   - Python 3.11 matches `docker/Dockerfile.test`
 #   - bandit uses `-ll` (medium and above), matching the runner's pass rule,
 #     which fails only on MEDIUM or HIGH findings
+#   - mypy and pytest run over a copy of the checkout with the project installed,
+#     as the runner's shared step does — a mypy that cannot resolve the project's
+#     dependencies reports a different set of errors than one that can (issue #77)
 # A divergence here means a PR can pass the factory's verification and fail CI,
 # confusing rather than safe.
 name: CI
@@ -78,6 +81,11 @@ jobs:
   # `qa` job above can still fail to even *collect* in there — that divergence
   # silently blocked four factory runs before it was noticed. This job runs the
   # suite where the factory actually runs it.
+  #
+  # It runs mypy there too, over the same installed copy, for the same reason: it
+  # is the check most sensitive to what is installed, and the gate and CI
+  # disagreeing about types is exactly what blocked `main` in issue #77. If this
+  # step and the runner ever drift, this job fails before the factory does.
   verification-image:
     runs-on: ubuntu-latest
     steps:
@@ -86,10 +94,17 @@ jobs:
       - name: Build the verification image
         run: docker build -t devfactory-test:latest -f docker/Dockerfile.test .
 
-      - name: Run the suite inside it, as the factory does
+      # Mirrors VerificationRunner._run_over_installed_copy: one copy at /build,
+      # one install, then mypy and pytest over it. The `rm -rf build` is part of
+      # the mirror, not housekeeping: setuptools builds in-tree, and the ./build/lib
+      # it leaves behind makes mypy report a duplicate module instead of checking.
+      - name: Type-check and test inside it, as the factory does
         run: |
           docker run --rm -v "$PWD:/workspace:ro" -w /workspace devfactory-test:latest sh -c '
-            D=$(mktemp -d); cp -r /workspace/. "$D"/; cd "$D"
+            set -e   # without it the step would exit with pytest status alone, hiding mypy
+            mkdir -p /build; cp -r /workspace/. /build/; cd /build
             pip install -q . || { echo "project install failed"; exit 1; }
+            rm -rf build
+            mypy . --ignore-missing-imports --cache-dir=/tmp/mypy_cache
             pytest --tb=short -q
           '

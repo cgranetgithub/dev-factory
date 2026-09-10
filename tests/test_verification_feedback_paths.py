@@ -8,7 +8,7 @@ seen from inside the verification container.
 
 from __future__ import annotations
 
-from devfactory.verification.runner import CONTAINER_WORKDIR, VerificationRunner
+from devfactory.verification.runner import BUILD_DIR, CONTAINER_WORKDIR, VerificationRunner
 
 
 def _ruff_issue(filename: str, row: int, message: str) -> dict:
@@ -31,8 +31,26 @@ def test_summary_strips_the_container_mount_from_ruff_paths():
     assert CONTAINER_WORKDIR not in summary
 
 
+def test_summary_strips_the_installed_copy_from_mypy_and_pytest():
+    """mypy and pytest run over the copy installed at BUILD_DIR, not the read-only
+    mount, so their paths carry the other prefix — and need the same normalisation."""
+    runner = VerificationRunner(image="test-image")
+    mypy = {"errors": [f"{BUILD_DIR}/devfactory/verification/runner.py:12: error: bad type"]}
+    pytest = {
+        "passed": 0,
+        "failed": 1,
+        "errors": [f"ERROR collecting {BUILD_DIR}/tests/test_new.py"],
+    }
+
+    summary = runner._build_summary({"issues": []}, mypy, {}, pytest, passed=False)
+
+    assert BUILD_DIR not in summary
+    assert "devfactory/verification/runner.py:12" in summary
+    assert "tests/test_new.py" in summary
+
+
 def test_summary_strips_the_container_mount_from_every_tool():
-    """mypy and pytest output go through the same normalisation as ruff."""
+    """Whichever prefix a tool reports under, the developer sees a repo-relative path."""
     runner = VerificationRunner(image="test-image")
     mypy = {
         "errors": [f"{CONTAINER_WORKDIR}/devfactory/verification/runner.py:12: error: bad type"]
