@@ -1,0 +1,52 @@
+name: Bug report
+description: Something in DevFactory itself is broken (the pipeline, the CLI, a gate).
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did DevFactory do, and what did you expect instead?
+      placeholder: |
+        The verification gate reported a clean pass, but `pytest` had actually failed
+        to collect — the container never ran a single test.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: >
+        Exact commands, and the smallest issue/repo state that triggers it.
+        If it only reproduces on a specific issue, link it.
+      placeholder: |
+        1. `devfactory run --issue 42 --repo owner/repo`
+        2. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Ollama version, models involved, OS. Run `ollama --version` and `devfactory models`.
+      placeholder: |
+        - OS: Ubuntu 22.04
+        - Ollama: 0.34.1
+        - Models: qwen3-coder:30b (developer), devstral:24b (reviewer)
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: >
+        Output of `devfactory logs --issue <N>` (or `--all` for the full run history),
+        trimmed to the relevant part. Paste as text, not a screenshot.
+      render: shell
+    validations:
+      required: false

@@ -196,3 +196,6 @@ python -m pytest tests/ --cov=devfactory --cov-report=term-missing
 - **Prompt improvements**: Better prompts → better agent output → better benchmarks.
 
 If you have a question, open an issue with the `question` label before starting a large change.
+Use the [factory task template](.github/ISSUE_TEMPLATE/factory_task.md) for feature/bug
+requests aimed at the pipeline, and see [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) and
+[SECURITY.md](SECURITY.md) for community and security-reporting expectations.

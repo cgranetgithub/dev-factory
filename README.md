@@ -483,7 +483,9 @@ The phased plan (P0 → P3) and its exit evidence live in [docs/VISION.md](docs/
 ## Contributing
 
 Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for setup instructions,
-coding standards, and how to submit changes.
+coding standards, and how to submit changes. Please also read our
+[Code of Conduct](CODE_OF_CONDUCT.md). Found a security issue? See
+[SECURITY.md](SECURITY.md) for how to report it privately.
 
 ---
 
