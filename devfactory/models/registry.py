@@ -37,6 +37,32 @@ class ModelMeta:
     # Re-qualify with scratchpad/qualify_real.sh-style runs, two trials minimum:
     # one model scored 4/4, then timed out, then 0/4 on the same exercise.
     drives_agentic_loop: bool = False
+    # Whether the model, acting as the reviewer, actually REFUSES a change that
+    # violates a stated acceptance criterion. It gates the reviewer role the way
+    # drives_agentic_loop gates every agentic role, and for the same reason: the
+    # review gate is claimed as a control in docs/VISION.md, and a control that
+    # cannot refuse is decoration.
+    #
+    # Measured, not assumed (2026-09-10, issue #101). Two staged changes against
+    # bot-bobby/devfactory-sandbox, each run twice per model, the model pinned:
+    #
+    #   Case 1 — a violated criterion. The spec says slugify("Café Münster")
+    #     returns "cafe-munster"; the code uses encode("ascii", "ignore"), which
+    #     drops the accents and returns "caf-mnster"; and the tests assert that
+    #     wrong result and pass. Everything needed is inside the diff.
+    #   Case 2 — a defect one file away. A correct to_ascii() helper is added,
+    #     exported and tested, but slugify() is never changed to call it, so the
+    #     criterion stays unmet and the new code is dead. The diff looks complete;
+    #     the defect is only visible in a file the diff does not touch.
+    #
+    # This flag records case 1 only. Case 2 was refused correctly by all four
+    # models on all eight runs — reading around the diff works. Case 1 is the
+    # harder one *for a model*, because a passing test suite that asserts the
+    # defect reads as evidence that the criterion is met.
+    #
+    # Re-run it with:
+    #   pytest tests/integration/test_review_gate_refusal.py -m integration -v -s
+    refuses_a_violated_criterion: bool = False
     notes: str = ""
 
 
@@ -81,6 +107,18 @@ MODELS: list[ModelMeta] = [
         # the others need 40-670s. Speed matters more than it looks — the loop can
         # run the developer three times per issue, behind two gates.
         drives_agentic_loop=True,
+        # Excluded from the review gate for INSTABILITY, like qwen2.5:32b above,
+        # not for incapacity. Case 1, four trials: approved (314s, "meets all
+        # acceptance criteria" — it had read the file, seen
+        # `text.encode("ascii", "ignore")` and called it "normalizing Unicode to
+        # ASCII"), unparseable prose (49s), changes_requested naming the defect
+        # correctly (356s), approved again (1063s). One refusal in four, and the
+        # two approvals were of a change that breaks the criterion. It is not a
+        # reading failure — it refused case 2 on both trials, quoting the value
+        # the code produces — and the same 49s-to-1063s spread makes the run cost
+        # unpredictable. A gate whose refusal is a coin toss is not a gate.
+        # Kept for the developer role, where it is the fastest driver we have.
+        refuses_a_violated_criterion=False,
         notes="Qwen3-generation code model (MoE). Newest and strongest Qwen coder.",
     ),
     ModelMeta(
@@ -122,6 +160,21 @@ MODELS: list[ModelMeta] = [
         # which is what makes an exploring reviewer possible without collapsing the
         # separation of duties onto a single model.
         drives_agentic_loop=True,
+        # Refuses whenever it answers: 2/2 on case 1 and 2/2 on case 2, naming the
+        # mechanism ("encode('ascii','ignore') discards non-ASCII characters
+        # instead of converting them") and flagging every test that asserts the
+        # defect. One of those case-1 refusals was nearly lost: it began with a
+        # sentence of preamble before the JSON, which the parser did not accept —
+        # fixed in the same change, and the reason for the test in
+        # tests/test_reviewer.py.
+        #
+        # Open reliability question, recorded rather than hidden: two later case-1
+        # trials hit the 1800s harness timeout instead of answering, having taken
+        # 79-325s earlier the same evening. Another process on the host was using
+        # Ollama at the same time, so this may be contention rather than the
+        # model. Re-measure on a quiet host before drawing a conclusion; the
+        # judgment itself has never been wrong here.
+        refuses_a_violated_criterion=True,
         notes="Zhipu GLM-4.7 (flash/local variant). Strong general reasoning.",
     ),
     ModelMeta(
@@ -140,6 +193,14 @@ MODELS: list[ModelMeta] = [
         # predecessor's flag: a version bump is a different model.
         roles=_GENERAL_AND_DEV_ROLES,
         drives_agentic_loop=True,
+        # The strongest reviewer measured: 4/4 refusals across both cases, fast
+        # (113-242s), and right for the right reason. On case 1 it explained the
+        # mechanism — "é (U+00E9) is a single code point, not base+combining, so
+        # there is nothing to ignore and it is dropped entirely" — flagged all
+        # three tests that assert the defect, and named both criteria it breaks.
+        # On case 2 it reported "verified at runtime: slugify('Café Münster')
+        # returns 'caf-m-nster'": it ran the code rather than reasoning about it.
+        refuses_a_violated_criterion=True,
         notes="Qwen3.8 27B dense. Latest Qwen general model, safe VRAM margin.",
     ),
     ModelMeta(
@@ -151,6 +212,13 @@ MODELS: list[ModelMeta] = [
         # many small steps (25-35 where others take 9) — a different method, same
         # outcome; step count is not a quality signal.
         drives_agentic_loop=True,
+        # Refuses on 4/4 across both cases, 147-389s. The most economical of the
+        # three: two or three comments that go straight to the line — "this line
+        # removes accented characters instead of normalizing them" and "the
+        # expected value 'caf-mnster' is incorrect, the requirement specifies
+        # 'cafe-munster'". Repo-relative comment paths on every run, which the
+        # inline-comment mapping needs.
+        refuses_a_violated_criterion=True,
         notes="Google Gemma 4. Reliable structured output for analyst/reviewer.",
     ),
 ]

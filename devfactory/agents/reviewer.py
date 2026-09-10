@@ -126,12 +126,8 @@ class ReviewerAgent(BaseAgent):
         return "\n".join(parts)
 
     def _parse_review(self, raw: str) -> ReviewResult:
-        match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL)
-        json_str = match.group(1) if match else raw.strip()
-
-        try:
-            data = json.loads(json_str)
-        except json.JSONDecodeError:
+        data = _verdict_object(raw)
+        if data is None:
             logger.warning("[reviewer] Could not parse JSON review")
             return ReviewResult(
                 model=self.model.name,
@@ -148,3 +144,42 @@ class ReviewerAgent(BaseAgent):
             inline_comments=data.get("inline_comments", []),
             score=float(data.get("score", 0.5)),
         )
+
+
+def _verdict_object(raw: str) -> dict | None:
+    """The JSON object in a reviewer's answer, however the model wrapped it.
+
+    Three shapes have come back from the reviewer models: a fenced block, the
+    bare object, and — measured on 2026-09-10 for #101 — a sentence of preamble
+    followed by the object. Only the first two used to parse. The third fell
+    through to the "could not parse" path, which returns ``commented``: a real
+    ``changes_requested`` was recorded as a non-refusal, in the very gate whose
+    refusals are being counted. ``glm-4.7-flash:latest`` did exactly that on one
+    of two trials against a violated acceptance criterion.
+
+    Returns None when nothing in ``raw`` parses as a JSON object, which is a
+    genuinely unusable answer rather than an awkwardly wrapped one.
+    """
+    candidates = []
+
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL)
+    if fenced:
+        candidates.append(fenced.group(1))
+
+    candidates.append(raw.strip())
+
+    # Last resort: the span from the first brace to the last. It is what recovers
+    # the preamble case, and it is tried last because it is the loosest — a model
+    # that returned a clean object is never read through this.
+    opening, closing = raw.find("{"), raw.rfind("}")
+    if 0 <= opening < closing:
+        candidates.append(raw[opening : closing + 1])
+
+    for candidate in candidates:
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            return data
+    return None
