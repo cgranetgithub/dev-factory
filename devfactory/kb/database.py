@@ -44,6 +44,10 @@ CREATE TABLE IF NOT EXISTS tasks (
     --         | ready_for_merge | merged | error
     branch_name     TEXT,
     pr_url          TEXT,
+    -- The analyst's specification issue for this task. Part of the evidence chain
+    -- (issue → spec → code → PR), and the address a later run for the same issue
+    -- can read instead of scanning the repository's issue listing for a marker.
+    spec_issue_number INTEGER,
     created_at      TEXT DEFAULT (datetime('now')),
     completed_at    TEXT
 );
@@ -93,6 +97,14 @@ CREATE INDEX IF NOT EXISTS idx_tasks_issue       ON tasks(github_issue_id);
 CREATE INDEX IF NOT EXISTS idx_control_repo      ON control_snapshots(repo, id);
 """
 
+# Columns added to SCHEMA after the first databases were created. `_ensure_db`
+# applies them to an existing file on open, since CREATE TABLE IF NOT EXISTS will
+# not. Append here whenever a column is added to a table; never remove an entry,
+# or databases that skipped a version stop being upgradable.
+_ADDED_COLUMNS = [
+    ("tasks", "spec_issue_number", "INTEGER"),
+]
+
 # Valid task statuses — enforced at application level
 TASK_STATUSES = frozenset(
     {
@@ -118,8 +130,28 @@ class Database:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as conn:
             conn.executescript(SCHEMA)
+            self._add_missing_columns(conn)
             self._migrate_qa_to_verification(conn)
         logger.debug(f"DB ready at {self.path}")
+
+    @staticmethod
+    def _add_missing_columns(conn: sqlite3.Connection):
+        """Add columns the schema has gained since a database was created.
+
+        ``CREATE TABLE IF NOT EXISTS`` leaves an existing table exactly as it is,
+        so a column added to SCHEMA never reaches a database that already holds
+        rows. Adding it here rather than recreating the table keeps the rows: they
+        are the audit trail, and the new column is simply NULL for the runs that
+        happened before it existed. Idempotent — nothing is added twice.
+        """
+        added = 0
+        for table, column, column_type in _ADDED_COLUMNS:
+            present = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+            if column not in present:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
+                added += 1
+        if added:
+            logger.info(f"[db] added {added} column(s) to bring the schema up to date")
 
     @staticmethod
     def _migrate_qa_to_verification(conn: sqlite3.Connection):
@@ -189,11 +221,11 @@ class Database:
         """
         Update task fields by keyword argument.
 
-        Allowed fields: status, branch_name, pr_url, completed_at.
+        Allowed fields: status, branch_name, pr_url, spec_issue_number, completed_at.
         Unknown fields are silently ignored.
         Status values are validated against TASK_STATUSES.
         """
-        allowed = {"status", "branch_name", "pr_url", "completed_at"}
+        allowed = {"status", "branch_name", "pr_url", "spec_issue_number", "completed_at"}
         fields = {k: v for k, v in kwargs.items() if k in allowed}
         if not fields:
             return

@@ -87,3 +87,18 @@ def test_a_resumed_run_without_a_spec_falls_back_to_the_analyst(quiet_pipeline, 
     pipeline.run(_issue())
 
     assert pipeline.analyst.calls == 1
+
+
+def test_the_run_records_the_spec_issue_it_built_from(quiet_pipeline, monkeypatch):
+    """The task row is where an auditor reads which specification a run
+    implemented, without having to search the repository's issues."""
+    monkeypatch.setattr(spec_issue, "find_spec_issue", lambda repo, n: None)
+    recorded: list[dict] = []
+    monkeypatch.setattr(
+        orchestrator.db, "update_task", lambda task_id, **fields: recorded.append(fields)
+    )
+    pipeline = quiet_pipeline()
+
+    pipeline.run(_issue())
+
+    assert {"spec_issue_number": 99} in recorded
