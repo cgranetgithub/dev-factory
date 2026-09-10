@@ -1,0 +1,60 @@
+# Per-repository verification profiles.
+#
+# The gate derives everything it can from the target repository itself — see
+# devfactory/verification/environment.py — so a repository belongs here only when
+# what it declares is not enough. Most repositories need no entry, and an empty
+# file is the expected state of this one.
+#
+# Loaded by devfactory/verification/profiles.py. Every key is optional; unknown
+# keys are refused rather than ignored, because a gate configured by accident
+# cannot produce evidence. Keys, and what they replace:
+#
+#   python_version = "3.14"        # replaces requires-python / .python-version /
+#                                  # the default below
+#   install = ["uv sync --all-extras"]   # replaces the derived install commands.
+#                                  # They run in the copy of the checkout, with the
+#                                  # virtualenv already created and VIRTUAL_ENV
+#                                  # exported.
+#   extras = ["test", "audit"]     # replaces the derived extras
+#   tools = ["ruff", "pytest"]     # narrows the gate; a tool left out is reported
+#                                  # as skipped, never as a pass
+#   ruff_args = ["--select", "E,F,B"]
+#   mypy_args = ["--strict"]
+#   pytest_args = ["-x"]
+#
+# The defaults, spelled out (all of them derived from the target):
+#
+#   Python      profile → .python-version → the lowest version satisfying
+#               requires-python → 3.12
+#   Install     uv.lock            → uv sync --frozen --python <v> [--extra …]
+#               pyproject.toml     → uv pip install -e .[extras]
+#               requirements.txt   → uv pip install -r requirements.txt
+#                                    [-r requirements-dev.txt] [-r requirements-test.txt]
+#               none of the three  → nothing installed, the virtualenv is still created
+#   Extras      the optional-dependency groups named dev / test / tests / testing,
+#               when the target declares them
+#   Tools       ruff, mypy, bandit, pytest
+#   pytest      always comes from the target's environment; the prepare step adds it
+#               there only when the target brings none of its own
+#
+# What does NOT belong here: a tool switched off to make a repository pass. The
+# gate reports what it finds; whether a pre-existing finding is acceptable is the
+# target owner's judgement, made in the target. `devfactory gate check --repo X`
+# prints exactly what would have to be decided.
+
+# Its own suite imports `anthropic`, which the project keeps in the optional
+# `audit` extra — deliberately optional, so that a default install stays free of
+# cloud dependencies. Nothing about the name "audit" says "test dependency", so
+# the derived extras (dev/test/tests/testing) cannot find it: without this line
+# nine tests fail on ModuleNotFoundError, which would be reported as a failure of
+# the target's suite and would not be one.
+["cgranetgithub/news-watch"]
+extras = ["test", "audit"]
+
+# The repository declares no `requires-python` at all (requirements.txt only), and
+# its CI installs 3.14 via uv. The derived default (3.12) installs and tests
+# cleanly, but the gate should judge a repository on the interpreter its own CI
+# uses — otherwise the factory can pass a change that CI then rejects, which is
+# the divergence .github/workflows/ci.yml exists to prevent for this project.
+["cgranetgithub/biz-explore"]
+python_version = "3.14"

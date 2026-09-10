@@ -34,6 +34,80 @@ def workspace_path(ctx: PipelineContext) -> Path:
     return settings.workspace / ctx.repo_name
 
 
+# Where an onboarding checkout goes: beside the pipeline's workspaces, never in
+# one of them. A dry run of the gate must not be able to disturb — or be disturbed
+# by — a pipeline run on the same repository.
+ONBOARDING_DIR = "onboarding"
+
+
+def clone_for_onboarding(repo: str) -> Path:
+    """Clone or refresh ``repo`` (``owner/repo``) at its default branch.
+
+    Used by the gate dry run, which asks a question about the repository itself
+    rather than about a change: does this repository pass its own gate as it
+    stands? It therefore wants the default branch and no feature branch.
+
+    Returns:
+        The checkout path.
+
+    Raises:
+        ValueError: ``repo`` is not ``owner/repo``.
+        RuntimeError: The clone or the refresh failed. Translated from
+            ``GitCommandError`` on purpose: the caller is the onboarding dry run,
+            and "we could not obtain the code" is a problem of ours to report as
+            one, not a verdict on the repository. The message carries git's own.
+    """
+    if repo.count("/") != 1 or not all(repo.split("/")):
+        raise ValueError(f"expected owner/repo, got {repo!r}")
+    owner, repo_name = repo.split("/")
+    path = settings.workspace / ONBOARDING_DIR / repo_name
+    url = _repo_url(owner, repo_name)
+
+    try:
+        if (path / ".git").exists():
+            logger.info(f"[git] refreshing onboarding checkout at {path}")
+            existing = git.Repo(path)
+            existing.remotes.origin.set_url(url)
+            # Same reasoning as setup_branch: reset before moving. A dry run
+            # inherits whatever the last one left behind otherwise, and the gate
+            # would judge it.
+            existing.git.reset("--hard")
+            existing.git.clean("-fd")
+            existing.git.checkout(default_branch(existing))
+            existing.remotes.origin.pull()
+            return path
+
+        logger.info(f"[git] cloning {repo} → {path}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        git.Repo.clone_from(url, path)
+    except git.GitError as exc:
+        # The token never reaches the message: _repo_url embeds it in the URL, and
+        # git echoes the URL back in its errors.
+        raise RuntimeError(f"could not obtain {repo}: {_redact(str(exc))}") from exc
+    return path
+
+
+def _redact(message: str) -> str:
+    """Strip the credentials git echoes back when it quotes a remote URL."""
+    return re.sub(r"https://[^@\s/]+@", "https://<token>@", message)
+
+
+def head_of(path: Path) -> tuple[str, str]:
+    """The commit and the branch a checkout is on, for the record.
+
+    Returns ``("unknown", "unknown")`` for a directory that is not a git
+    checkout: a dry run can be pointed at a plain export, and refusing to report
+    on it would be worse than reporting it without a SHA.
+    """
+    try:
+        repo = git.Repo(path)
+        branch = "(detached)" if repo.head.is_detached else repo.active_branch.name
+        return str(repo.head.commit.hexsha), branch
+    except (git.InvalidGitRepositoryError, git.NoSuchPathError, ValueError) as exc:
+        logger.warning(f"[git] {path} is not a usable checkout ({exc})")
+        return "unknown", "unknown"
+
+
 def _branch_slug(title: str) -> str:
     """Convert issue title to a safe branch slug."""
     slug = title.lower()
