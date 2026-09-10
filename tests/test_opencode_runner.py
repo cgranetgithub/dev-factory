@@ -168,17 +168,47 @@ def test_stdout_is_returned_for_the_caller_to_parse(monkeypatch, tmp_path):
 
 
 class _HangingPopen(_FakePopen):
-    """A process that never produces anything, like the hang seen in two runs."""
+    """A process still running when a deadline fires.
 
-    def __init__(self, args, **kwargs):
+    ``produced`` is what the timed-out ``communicate`` reports having already read:
+    empty for a genuine hang, non-empty for a run that is merely slow. The pipes
+    themselves are left as None, because that is the real situation — waiting is
+    reading, so by the time a deadline fires there is nothing left in them.
+    """
+
+    def __init__(self, args, produced=b"", **kwargs):
         super().__init__(args, **kwargs)
         self.stdout = None
         self.stderr = None
         self.communicate_calls = 0
+        self.produced = produced
 
     def communicate(self, timeout=None):
         self.communicate_calls += 1
-        raise subprocess.TimeoutExpired(cmd=self.args, timeout=timeout or 0)
+        raise subprocess.TimeoutExpired(
+            cmd=self.args,
+            timeout=timeout or 0,
+            output=self.produced or None,
+            stderr=self.produced or None,
+        )
+
+
+class _Launches:
+    """A ``Popen`` stand-in handing out one scripted process per launch.
+
+    The retry means a single call can start the CLI twice, so a test has to be able
+    to say what the *second* launch does — and to count how many there were.
+    """
+
+    def __init__(self, *processes):
+        self._queue = list(processes)
+        self.started: list[_FakePopen] = []
+
+    def __call__(self, cmd, **kwargs):
+        process = self._queue.pop(0)
+        process.args = cmd
+        self.started.append(process)
+        return process
 
 
 def test_a_hung_run_is_abandoned_at_the_startup_deadline(monkeypatch, tmp_path):
@@ -195,6 +225,79 @@ def test_a_hung_run_is_abandoned_at_the_startup_deadline(monkeypatch, tmp_path):
     assert hung.killed, "a hung CLI must not be left holding the model"
 
 
+def test_a_startup_hang_is_retried_once_and_then_works(monkeypatch, tmp_path, caplog):
+    """The hang is the harness, not the work: the process never reached the model,
+    so it never touched the checkout and starting it again is free. Losing a whole
+    pipeline run to it — as happened on issue #4 — is not."""
+    monkeypatch.setattr(settings, "opencode_startup_timeout_s", 1)
+    hung = _HangingPopen(["opencode"])
+    launches = _Launches(hung, _FakePopen(["opencode"], stdout="the answer"))
+    monkeypatch.setattr(subprocess, "Popen", launches)
+
+    assert _run(tmp_path).output == "the answer"
+
+    assert len(launches.started) == 2, "the hung launch must be replaced by a second one"
+    assert hung.killed, "the hung CLI must be killed before the retry starts"
+    assert "restarting once" in caplog.text
+
+
+def test_two_startup_hangs_in_a_row_give_up(monkeypatch, tmp_path):
+    """Twice in a row is a broken host, not a hiccup — the retry must not become a
+    loop that never reports anything."""
+    monkeypatch.setattr(settings, "opencode_startup_timeout_s", 1)
+    launches = _Launches(_HangingPopen(["opencode"]), _HangingPopen(["opencode"]))
+    monkeypatch.setattr(subprocess, "Popen", launches)
+
+    with pytest.raises(RuntimeError, match="produced no output"):
+        _run(tmp_path)
+
+    assert len(launches.started) == 2, "exactly one retry, not an unbounded one"
+    assert all(p.killed for p in launches.started)
+
+
+def test_a_run_that_wrote_before_the_deadline_is_not_called_hung(monkeypatch, tmp_path):
+    """The regression that killed three runs on sandbox #4.
+
+    Waiting *is* reading: by the time the startup deadline fires, `communicate`
+    has drained both pipes into itself, so looking at the pipes afterwards always
+    finds them empty. The watchdog did exactly that, concluded "no output", and
+    condemned every run slower than 120s — which is every developer run. The only
+    surviving evidence is what the timed-out call reports it had already read, and
+    that is what the verdict must be built on.
+    """
+    monkeypatch.setattr(settings, "opencode_startup_timeout_s", 1)
+
+    class _WroteThenFinished(_HangingPopen):
+        def communicate(self, timeout=None):
+            self.communicate_calls += 1
+            if self.communicate_calls == 1:
+                return super().communicate(timeout)
+            return "the answer", ""
+
+    # Pipes empty (stdout/stderr are None on _HangingPopen), banner already read.
+    process = _WroteThenFinished(["opencode"], produced=b"level=INFO message=bootstrapping\n")
+    launches = _Launches(process)
+    monkeypatch.setattr(subprocess, "Popen", launches)
+
+    assert _run(tmp_path).output == "the answer"
+    assert len(launches.started) == 1, "a working run must not be killed and relaunched"
+    assert not process.killed
+
+
+def test_the_long_timeout_is_not_retried(monkeypatch, tmp_path):
+    """A run that hit the long timeout had started working. Re-running it would
+    spend the same half hour again for the same answer."""
+    monkeypatch.setattr(settings, "opencode_startup_timeout_s", 1)
+    monkeypatch.setattr(settings, "opencode_timeout_s", 2)
+    launches = _Launches(_HangingPopen(["opencode"], produced=b"banner\n"))
+    monkeypatch.setattr(subprocess, "Popen", launches)
+
+    with pytest.raises(RuntimeError, match="timed out after"):
+        _run(tmp_path)
+
+    assert len(launches.started) == 1
+
+
 def test_a_slow_but_working_run_is_allowed_to_finish(monkeypatch, tmp_path):
     """Real work takes minutes. The startup deadline asks a narrower question —
     has it written anything — so it must not cut off a run that has."""
@@ -204,13 +307,12 @@ def test_a_slow_but_working_run_is_allowed_to_finish(monkeypatch, tmp_path):
         def communicate(self, timeout=None):
             self.communicate_calls += 1
             if self.communicate_calls == 1:
-                raise subprocess.TimeoutExpired(cmd=self.args, timeout=timeout or 0)
+                return super().communicate(timeout)
             return "the answer", ""
 
-    slow = _Slow(["opencode"])
+    # It had written its banner before the deadline, so it is working, not hung.
+    slow = _Slow(["opencode"], produced=b"banner\n")
     monkeypatch.setattr(subprocess, "Popen", lambda cmd, **kw: slow)
-    # It has written something, so it is working rather than hung.
-    monkeypatch.setattr("devfactory.opencode._has_written_anything", lambda p: True)
 
     assert _run(tmp_path).output == "the answer"
     assert not slow.killed
@@ -219,9 +321,8 @@ def test_a_slow_but_working_run_is_allowed_to_finish(monkeypatch, tmp_path):
 def test_the_long_timeout_still_bounds_real_work(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "opencode_startup_timeout_s", 1)
     monkeypatch.setattr(settings, "opencode_timeout_s", 2)
-    hung = _HangingPopen(["opencode"])
+    hung = _HangingPopen(["opencode"], produced=b"banner\n")
     monkeypatch.setattr(subprocess, "Popen", lambda cmd, **kw: hung)
-    monkeypatch.setattr("devfactory.opencode._has_written_anything", lambda p: True)
 
     with pytest.raises(RuntimeError, match="timed out after"):
         _run(tmp_path)

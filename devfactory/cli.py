@@ -64,7 +64,15 @@ def run(
     except ValueError as e:
         console.print(f"[bold red]✗[/] {e}")
         raise typer.Exit(code=2) from e
-    ctx = pipeline.run(gh_issue)
+    try:
+        ctx = pipeline.run(gh_issue)
+    except Exception as e:
+        # The pipeline has already logged the traceback and labelled the issue; the
+        # only thing missing was telling the caller. A run that died on a harness
+        # hiccup used to exit 0, which makes `devfactory run` impossible to script:
+        # the shell saw success and the next command ran on a branch with no PR.
+        console.print(f"[bold red]✗ Pipeline failed:[/] {e}")
+        raise typer.Exit(code=1) from e
 
     if ctx.pr_url:
         console.print(f"[bold green]✓ Done![/] PR: {ctx.pr_url}")

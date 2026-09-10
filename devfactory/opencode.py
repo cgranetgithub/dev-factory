@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import select
 import subprocess
 import time
 from dataclasses import dataclass
@@ -108,13 +107,22 @@ def run(
     return OpenCodeResult(output=result.stdout, duration_ms=duration_ms)
 
 
+class _StartupHangError(RuntimeError):
+    """OpenCode produced nothing at all before the startup deadline.
+
+    A subclass rather than a flag so the retry can tell this apart from every other
+    failure without inspecting a message. It is still a ``RuntimeError``, so a
+    caller that only knows about the documented failure type is unaffected.
+    """
+
+
 def _run_with_watchdog(
     cmd: list[str], env: dict[str, str], role: str
 ) -> subprocess.CompletedProcess[str]:
-    """Run the CLI, and give up early if it never starts working.
+    """Run the CLI, give up early if it never starts working, and relaunch once.
 
-    Observed twice: OpenCode initialises, logs its config, and then sits in its
-    event loop having sent nothing to the model — Ollama idle, GPU at zero, no
+    Observed three times: OpenCode initialises, logs its config, and then sits in
+    its event loop having sent nothing to the model — Ollama idle, GPU at zero, no
     output. Under a single 30-minute timeout that costs half an hour of wall clock
     before the pipeline learns anything.
 
@@ -122,9 +130,24 @@ def _run_with_watchdog(
     process produced *any* output yet? A working run prints its banner within
     seconds. The long one bounds the actual work, which legitimately takes minutes.
 
-    A run killed by the startup deadline raises like any other failure, so the loop
-    treats it as an attempt rather than swallowing it.
+    The startup hang is transient and it is the harness, not the work: a process
+    that never reached the model also never touched the checkout, so starting it
+    again costs a few seconds and changes nothing else. It is retried exactly once —
+    twice in a row is a broken host, not a hiccup, and the second failure raises so
+    the pipeline stops instead of looping on it. A run that hit the *long* timeout
+    is not retried: that one had started working, and re-running it would spend the
+    same half hour again.
     """
+    try:
+        return _launch(cmd, env, role)
+    except _StartupHangError:
+        logger.warning(f"[{role}] opencode hung before reaching the model — restarting once")
+
+    return _launch(cmd, env, role)
+
+
+def _launch(cmd: list[str], env: dict[str, str], role: str) -> subprocess.CompletedProcess[str]:
+    """Start the CLI once and wait on it under both deadlines."""
     with subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env
     ) as process:
@@ -139,18 +162,27 @@ def _run_with_watchdog(
 
 
 def _wait_for(process: subprocess.Popen[str], role: str) -> subprocess.CompletedProcess[str]:
+    """Wait under both deadlines, and tell a hung run apart from a slow one.
+
+    The evidence for "it is alive" comes from the timed-out ``communicate`` itself,
+    which reports on the exception what it had already read. It has to: waiting
+    *is* reading, so by the time the startup deadline fires the pipes have been
+    drained into that call and there is nothing left to look at. Asking the pipes
+    instead — which is what this did — answers "nothing written" for every run,
+    and so condemns every run slower than the startup deadline.
+    """
     deadline = settings.opencode_startup_timeout_s
     try:
         stdout, stderr = process.communicate(timeout=deadline)
-    except subprocess.TimeoutExpired:
-        pass
+    except subprocess.TimeoutExpired as expired:
+        produced_output = bool(expired.stdout) or bool(expired.stderr)
     else:
         return subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
 
     # Still running after the startup deadline. That is normal for real work, and
     # the way to tell the two apart is whether anything has been written yet.
-    if not _has_written_anything(process):
-        raise RuntimeError(
+    if not produced_output:
+        raise _StartupHangError(
             f"opencode produced no output in {deadline}s — it appears to have hung "
             f"before reaching the model, so the run was abandoned rather than "
             f"waiting for the {settings.opencode_timeout_s}s limit"
@@ -163,21 +195,6 @@ def _wait_for(process: subprocess.Popen[str], role: str) -> subprocess.Completed
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"opencode run timed out after {settings.opencode_timeout_s}s") from exc
     return subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
-
-
-def _has_written_anything(process: subprocess.Popen[str]) -> bool:
-    """Whether the process has written to stdout or stderr yet.
-
-    Checked without reading, so the pipes stay intact for `communicate`: a
-    non-empty read buffer on either descriptor is enough to say it is alive.
-    """
-    for stream in (process.stdout, process.stderr):
-        if stream is None:
-            continue
-        ready, _, _ = select.select([stream], [], [], 0)
-        if ready:
-            return True
-    return False
 
 
 def _env(model_name: str) -> dict[str, str]:
