@@ -99,3 +99,10 @@ warn_unused_ignores   = true
 [tool.pytest.ini_options]
 testpaths    = ["tests"]
 asyncio_mode = "strict"
+# Integration tests need a real Ollama, real models and network access, and one
+# sweep costs tens of minutes. They live under tests/integration/ and are opted
+# into with `-m integration`; the default suite must stay fast and hermetic.
+addopts      = "-m 'not integration'"
+markers      = [
+    "integration: needs live models, Docker or GitHub — excluded from the default suite",
+]
