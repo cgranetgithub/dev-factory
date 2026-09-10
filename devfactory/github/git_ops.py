@@ -57,7 +57,20 @@ def setup_branch(ctx: PipelineContext) -> git.Repo:
         repo = git.Repo(workspace)
         origin = repo.remotes.origin
         origin.set_url(url)
-        # Reset to clean state on default branch
+        # Reset to a clean state *before* touching branches. This claimed to do
+        # that and only checked out, which is not the same thing: a run that died
+        # between the developer's edits and the commit leaves those edits in the
+        # tree, and `git checkout` refuses to move with them there. Every later run
+        # on this repository then failed at its first step, before the analyst had
+        # even started — one crash poisoned the workspace until a human cleaned it.
+        #
+        # Moving with them there is worse, and it happened: uncommitted leftovers
+        # become the code the analyst reads and the base the diff is measured
+        # against, so the specification describes work that is in no commit and in
+        # no repository. Nothing an agent produced is meant to survive its run —
+        # what a run keeps, it commits.
+        repo.git.reset("--hard")
+        repo.git.clean("-fd")
         base = default_branch(repo)
         repo.git.checkout(base)
         origin.pull()
