@@ -205,3 +205,114 @@ def test_spec_for_refuses_to_proceed_without_a_published_spec():
     """A stage that went on without one would work from the issue title."""
     with pytest.raises(spec_issue.SpecNotPublishedError, match="issue #7"):
         spec_issue.spec_for(_ctx(None))
+
+
+# ── One specification per issue ──────────────────────────────────────────────
+
+
+class _PaginatedIssues:
+    """A stand-in for PyGithub's ``PaginatedList``.
+
+    Pages are fetched as the iteration crosses them, which is exactly what makes a
+    reader that stops early miss what is on the later ones.
+    """
+
+    def __init__(self, pages: list[list[_Issue]]):
+        self._pages = pages
+        self.pages_read = 0
+
+    def __iter__(self):
+        for page in self._pages:
+            self.pages_read += 1
+            yield from page
+
+
+class _PagedRepo(_Repo):
+    """A repository whose issue listing arrives one page at a time."""
+
+    def __init__(self, pages: list[list[_Issue]]):
+        super().__init__()
+        self.listing = _PaginatedIssues(pages)
+
+    def get_issues(self, **kwargs):
+        return self.listing
+
+
+def test_two_spec_issues_for_one_issue_stop_the_run(monkeypatch):
+    """Picking one of them is the silent failure: the developer can build from one
+    while a human amends the other."""
+    repo = _Repo(
+        issues=[
+            _Issue(56, body="<!-- devfactory:spec-for:7 -->\nthe duplicate"),
+            _Issue(55, body="<!-- devfactory:spec-for:7 -->\nthe first one"),
+        ]
+    )
+    _install(monkeypatch, repo)
+
+    with pytest.raises(spec_issue.AmbiguousSpecError) as raised:
+        spec_issue.publish_spec("o/r", 7, "t", _spec())
+
+    message = str(raised.value)
+    # Both numbers, or the human cannot act on it.
+    assert "#55" in message
+    assert "#56" in message
+    assert "#7" in message
+    assert repo.created == [], "an ambiguity must not be resolved by adding a third"
+
+
+def test_the_oldest_spec_issue_is_the_one_the_message_points_at(monkeypatch):
+    repo = _Repo(
+        issues=[
+            _Issue(56, body="<!-- devfactory:spec-for:7 -->"),
+            _Issue(55, body="<!-- devfactory:spec-for:7 -->"),
+        ]
+    )
+    _install(monkeypatch, repo)
+
+    with pytest.raises(spec_issue.AmbiguousSpecError, match=r"Keep one — #55"):
+        spec_issue.find_spec_issue("o/r", 7)
+
+
+def test_one_spec_issue_is_returned(monkeypatch):
+    existing = _Issue(55, body="<!-- devfactory:spec-for:7 -->")
+    _install(monkeypatch, _Repo(issues=[existing]))
+
+    assert spec_issue.find_spec_issue("o/r", 7) is existing
+
+
+def test_no_spec_issue_yet_is_not_an_error(monkeypatch):
+    _install(monkeypatch, _Repo(issues=[_Issue(55, body="<!-- devfactory:spec-for:8 -->")]))
+
+    assert spec_issue.find_spec_issue("o/r", 7) is None
+
+
+def test_the_lookup_reads_the_whole_listing_not_the_first_page(monkeypatch):
+    """A spec issue on a later page is the one a run would duplicate."""
+    repo = _PagedRepo(
+        pages=[
+            [_Issue(51, body="<!-- devfactory:spec-for:1 -->")],
+            [_Issue(52, body="<!-- devfactory:spec-for:2 -->")],
+            [_Issue(53, body="<!-- devfactory:spec-for:7 -->")],
+        ]
+    )
+    _install(monkeypatch, repo)
+
+    found = spec_issue.find_spec_issue("o/r", 7)
+
+    assert found is not None
+    assert found.number == 53
+    assert repo.listing.pages_read == 3, "every page must be read, not just the first"
+
+
+def test_a_duplicate_on_a_later_page_is_still_seen(monkeypatch):
+    """Stopping at the first match is what makes a duplicate invisible."""
+    repo = _PagedRepo(
+        pages=[
+            [_Issue(55, body="<!-- devfactory:spec-for:7 -->")],
+            [_Issue(56, body="<!-- devfactory:spec-for:7 -->")],
+        ]
+    )
+    _install(monkeypatch, repo)
+
+    with pytest.raises(spec_issue.AmbiguousSpecError, match="#56"):
+        spec_issue.find_spec_issue("o/r", 7)

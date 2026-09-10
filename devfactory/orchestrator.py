@@ -131,6 +131,14 @@ class Pipeline:
             else:
                 ctx = self.analyst.execute(ctx)
 
+            # Recorded, not read back: the task row is where an auditor finds which
+            # specification a run built from, and it completes the evidence chain
+            # issue → spec → code → PR in the knowledge base. The lookup above
+            # still asks GitHub, because GitHub is where the specification lives —
+            # a human can close, replace or unlabel a spec issue at any time, and a
+            # row written by an earlier run would then point at the wrong one.
+            db.update_task(task_id, spec_issue_number=ctx.spec_issue_number)
+
             # ── 3. Developer → verification → review loop ─────────────────────
             ctx = self._build_loop(ctx, task_id)
 
