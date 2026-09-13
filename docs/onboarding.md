@@ -17,22 +17,56 @@ in DevFactory. Onboarding is therefore short, and its purpose is to find out
 devfactory init --repo owner/repo
 ```
 
-It does five things, in order:
+It does six things, in order:
 
 1. creates the DevFactory labels on the repository;
 2. builds the verification image (`docker/Dockerfile.test`);
-3. checks Ollama and pulls every model the registry declares;
-4. initialises the knowledge base;
-5. **runs the gate on the repository's default branch** and reports it tool by tool.
+3. creates the repository's uv cache volume (see below);
+4. checks Ollama and pulls every model the registry declares;
+5. initialises the knowledge base;
+6. **runs the gate on the repository's default branch** and reports it tool by tool.
 
-Step 5 decides the outcome: `init` exits non-zero when the gate does not pass,
+Step 6 decides the outcome: `init` exits non-zero when the gate does not pass,
 because a repository whose `main` already fails verification will fail it on every
-run, whatever the developer agent produces.
+run, whatever the developer agent produces. It also leaves the cache warm, so the
+first real pipeline run is not the one that pays to fill it.
 
 > **The image must be rebuilt after upgrading DevFactory.** Since issue #92 the
 > runner drives `uv` inside the image; an older image has no `uv` and every gate
 > run ends in the error state. `devfactory init` rebuilds it, or:
 > `docker build -f docker/Dockerfile.test -t devfactory-test:latest .`
+
+### The uv cache volume
+
+The gate mounts a named Docker volume at `/cache/uv` in the container that
+installs the target, so a dependency tree is resolved and downloaded once rather
+than once per container (issue #109 — without it the gate cost 139-161 s per run
+on DevFactory itself instead of 16 s).
+
+```bash
+docker volume ls   --filter name=devfactory-uv-cache      # what exists
+docker volume inspect devfactory-uv-cache-owner-repo-1a2b3c4d
+docker volume rm   devfactory-uv-cache-owner-repo-1a2b3c4d   # wipe one
+docker volume rm $(docker volume ls -q --filter name=devfactory-uv-cache)  # wipe all
+```
+
+Wiping is always safe: the next gate run refills what it needs and costs the cold
+time once. Wipe when a run is suspected of having written something into the
+cache it should not have — the cache is the one piece of state that survives a
+`--rm` container, and the scope setting bounds, but does not remove, what that
+means.
+
+`DEVFACTORY_UV_CACHE_SCOPE` chooses the boundary:
+
+| value | volume | what it means |
+|---|---|---|
+| `repository` *(default)* | one per target slug | a repository's runs share a cache with each other and with no other repository — the trust boundary that already existed, since those runs are that repository's own code |
+| `shared` | `devfactory-uv-cache-shared` | one cache for every target. Faster the first time a new repository is gated — measured 2026-09-13, a shared cache already warmed by DevFactory took news-watch's first run from 44.4 s to 40.2 s and biz-explore's from 97.8 s to 75.3 s, once each — and it also lets one target's test run reach wheels another target will install |
+| `off` | none | the pre-#109 behaviour, every container refetches everything |
+
+The reasoning behind the default, including what uv does and does not verify, is
+in the docstring of `VerificationRunner._docker_run` — read it before changing
+the scope.
 
 ## 2. Run the gate dry run on its own
 
@@ -196,29 +230,88 @@ string concatenation that predates the factory. Two are worth singling out:
   findings is mostly that. The fix is a `ruff.toml` in news-watch, chosen by its
   owner; `ruff_args` in the profile is the fallback, and it is a fallback.
 
-**Neither repository can be processed by the factory until its `main` passes.**
-The developer agent would spend its whole retry budget on findings that have
-nothing to do with the issue it was given, and the run would end with no pull
-request. That is a real limitation of an absolute gate, recorded below and tracked in
-[#104](https://github.com/cgranetgithub/dev-factory/issues/104).
+Neither repository passed its own gate, and while the gate was absolute that meant
+neither could be processed at all: the developer agent would have spent its whole
+retry budget on findings that have nothing to do with the issue it was given.
+**That is fixed** — the pipeline now judges a change differentially (#104), and the
+measurement is in the next section. `devfactory gate check` still reports
+absolutely, because "is this repository clean?" is the right question to ask about
+a repository, and its answer is the baseline every later verdict rests on.
+
+---
+
+## What the differential gate changes (issue #104)
+
+The pipeline's gate fails on what a change **introduced**, measured against the
+base commit's own report. The four tools still run over the whole repository —
+nothing is hidden for being old — but a finding that was already there is
+*inherited*: reported, counted, tabled in the pull request, and not blocking.
+
+Measured on 2026-09-13, on clones of both targets, image already built:
+
+| | biz-explore @ `d7828f57` | news-watch @ `698e3f2f` |
+|---|---|---|
+| Gate on untouched `main`, **absolute** | ✗ fail — mypy 27, bandit 361/MEDIUM | ✗ fail — ruff 70, mypy 12, bandit 283/MEDIUM |
+| Gate on untouched `main`, **differential** | **✓ pass** — 388 inherited, 0 introduced | **✓ pass** — 365 inherited, 0 introduced |
+| Branch introducing one finding per tool | ✗ fail — names 1 ruff, 1 mypy, 1 pytest, and nothing else | ✗ fail — names 2 ruff, 1 mypy, 1 pytest, and nothing else |
+| Branch fixing one inherited finding | ✓ pass — 1 mypy fixed, 0 introduced | ✓ pass — 1 ruff fixed, 0 introduced |
+| Wall clock, gate on the branch | 69–80 s | 25–36 s |
+| Wall clock, baseline (once per base SHA) | 116 s | 28 s |
+
+The introduced-finding branches added one module with an unused import and a wrong
+return type, plus one failing test. What came back named exactly those, with the
+365 (or 388) inherited findings listed separately as inherited and **absent from
+the developer's copy of the summary** — which is the whole point.
+
+Three things worth knowing:
+
+- **the baseline is measured once per `(repo, base SHA)`** and stored in the
+  knowledge base, so only the first run on a base commit pays for it. It is also
+  an audit record: it says what was already wrong at that commit, when it was
+  measured, and with which environment. The rows are append-only — a new
+  measurement is a new row, never an edit;
+- **`devfactory gate check` seeds it.** A dry run on the default branch is
+  exactly the reading a baseline holds, so it is recorded, and the first pipeline
+  run on that commit is free of the extra gate run;
+- **the rule is always printed.** Every report says `Pass rule: differential`
+  (with the commit it was measured against) or `Pass rule: absolute` (with the
+  reason there is no baseline). Set `DEVFACTORY_DIFFERENTIAL_GATE=false` to go
+  back to the absolute rule everywhere.
+
+A tool that ends in the **error** state still fails the report. "The tool could
+not run" is not a finding that can be inherited.
 
 ---
 
 ## Known limits
 
-- **The gate is absolute, not differential.** It asks "is this repository clean?",
-  not "did this change make it worse". Any repository with pre-existing findings
-  is unusable until they are fixed or a tool is switched off for it. This is the
-  single biggest obstacle to onboarding an existing codebase, and it is why both
-  current targets are onboarded but blocked; tracked in
-  [#104](https://github.com/cgranetgithub/dev-factory/issues/104).
+- **The differential gate is per finding key, not per line.** Two findings match
+  when their `(file, rule code, message)` — or `(file, test id, severity)` for
+  bandit, or the node id for pytest — are equal, counted as a multiset. A change
+  that deletes one occurrence of a key and adds another elsewhere in the same file
+  nets to zero and is not reported. Line numbers are deliberately not part of the
+  key: they move whenever anything above them changes.
+- **A flaky test reads as an introduced failure.** Its node id was not in the
+  base's failing set, so a test that fails only sometimes fails the gate on the
+  branch. That is not new — an absolute gate failed on it too — but the
+  differential rule does not fix it either, and a target with a flaky suite will
+  see it. `pytest_args` in the profile is the current lever.
+- **A tool that errored on the base is judged absolutely.** The base measured
+  nothing for it, so "was it already there?" has no answer, and the strict reading
+  is the only honest one. The report names the tool and the reason.
 - **ruff's defaults stand in for a missing configuration.** A target with no ruff
   configuration is judged by whatever the image's ruff version defaults to, which
   changes when the image is rebuilt. Targets should carry their own config.
-- **No shared uv cache.** Each container fetches its wheels again; the
-  interpreters are baked into the image, the packages are not. That costs a few
-  seconds per run today — the whole gate is 14–19 s on these repositories,
-  DevFactory included — and would cost more on a heavier dependency tree.
+- **The first gate run on a repository is the slow one.** Since
+  [#109](https://github.com/cgranetgithub/dev-factory/issues/109) the uv download
+  cache lives on a named Docker volume, so only a run against an empty volume
+  pays for the whole dependency tree. Measured 2026-09-13, two runs per state,
+  whole gate: DevFactory 161.1 s / 138.8 s cold and 16.0 s / 15.9 s warm,
+  news-watch 44.4 s / 44.8 s cold and 12.9 s / 12.6 s warm, biz-explore 97.8 s /
+  109.4 s cold and 18.2 s / 18.7 s warm. `devfactory init` warms the volume as part of
+  onboarding, so in practice a pipeline run pays the warm figure; wiping the
+  volume, or onboarding a repository whose dependencies nothing else has fetched,
+  pays the cold one once.
 - **A Python version the image does not cache is downloaded per run.** Cached:
   3.11, 3.12, 3.13, 3.14.
 - **The install needs the network**, like `pip install` did before it. Nothing

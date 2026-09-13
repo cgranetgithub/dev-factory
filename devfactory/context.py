@@ -51,6 +51,28 @@ class VerificationReport:
     pytest: dict  # {"passed": int, "failed": int, "errors": [...]}
     summary: str  # human-readable summary for agents
     raw_output: str  # full combined output
+    # What the gate was run against, as environment.describe() puts it. Part of
+    # the record: the same commit verified on another interpreter is another
+    # verdict, and the reader has to know which one this was.
+    environment: str = ""
+    # Which pass rule produced `passed`: "absolute" (every finding counts) or
+    # "differential" (only what the change introduced, measured against the base
+    # branch's own report — issue #104). A verdict whose rule is invisible is not
+    # evidence, so it travels with the report rather than only in the summary.
+    rule: str = "absolute"
+    # The verdict as data — introduced, inherited and fixed, per tool. None under
+    # the absolute rule, where there is nothing to attribute. Read by the pull
+    # request body, which is where the human sees the repository's standing debt.
+    differential: dict | None = None
+    # The summary with the inherited findings left out. This is what the developer
+    # is handed on a send-back: it burns its iteration budget on pre-existing
+    # findings otherwise. Empty under the absolute rule, where the two are the same.
+    introduced_summary: str = ""
+
+    @property
+    def developer_feedback(self) -> str:
+        """What a send-back shows the developer: only what this change introduced."""
+        return self.introduced_summary or self.summary
 
 
 @dataclass

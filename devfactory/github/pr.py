@@ -15,7 +15,7 @@ import logging
 import git
 from github import GithubException
 
-from devfactory.context import PipelineContext
+from devfactory.context import PipelineContext, VerificationReport
 from devfactory.github import spec_issue
 from devfactory.github.client import gh
 from devfactory.github.git_ops import default_branch, workspace_path
@@ -124,6 +124,7 @@ def _build_pr_body(ctx: PipelineContext) -> str:
             ctx.verification_report.summary,
             "",
         ]
+        lines += _inherited_findings(ctx.verification_report)
 
     # An unsatisfied review gate must be impossible to miss: the human approver is
     # the one who arbitrates it, so it belongs at the top of what they read, not in
@@ -151,6 +152,50 @@ def _build_pr_body(ctx: PipelineContext) -> str:
     ]
 
     return "\n".join(lines)
+
+
+def _inherited_findings(report: VerificationReport) -> list[str]:
+    """The repository's standing debt, as a table the approver cannot miss.
+
+    Under the differential rule the gate passes a change that introduces nothing,
+    on a repository that is not clean (issue #104). That is the right verdict and
+    it is also a claim about what was already there, so the claim is shown: which
+    commit it was measured against, and how much each tool inherited. The
+    ``CLAUDE.md`` evidence rule is the reason this is not merely left in the log —
+    an inherited finding is reported, never dropped.
+
+    Returns an empty list under the absolute rule, where nothing is inherited
+    because nothing is attributed.
+    """
+    record = report.differential
+    if not record or record.get("rule") != "differential":
+        return []
+
+    rows = [
+        (name, tool["inherited_count"], tool["fixed_count"])
+        for name, tool in record.get("tools", {}).items()
+        if tool["inherited_count"] or tool["fixed_count"]
+    ]
+    if not rows:
+        return []
+
+    base = record.get("baseline") or {}
+    where = f"`{base.get('repo', '?')}@{str(base.get('base_sha', '?'))[:8]}`"
+    lines = [
+        "### Inherited findings — already present before this change",
+        "",
+        f"Measured on {where} by the same gate, on "
+        f"{base.get('recorded_at', 'an earlier run')}. These are the repository's "
+        "standing debt: they did not block this change and were not fixed by it. "
+        "They are listed so nothing is silently dropped.",
+        "",
+        "| Tool | Inherited | Fixed by this change |",
+        "|---|---|---|",
+    ]
+    for name, inherited, fixed in rows:
+        lines.append(f"| {name} | {inherited} | {fixed} |")
+    lines.append("")
+    return lines
 
 
 def _ensure_pr_label(repo):
