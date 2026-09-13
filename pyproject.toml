@@ -29,6 +29,9 @@ dependencies = [
     # written by hand. The checkpointer lets an interrupted run resume.
     "langgraph>=1.2",
     "langgraph-checkpoint-sqlite>=3.1",
+    # `requires-python` is a PEP 440 specifier set, and the gate reads the target's
+    # to pick its interpreter. Comparing version specifiers by hand is the wheel.
+    "packaging>=24.0",
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
     "rich>=13.7",

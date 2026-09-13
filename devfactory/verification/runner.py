@@ -2,12 +2,14 @@
 Verification Runner — executes ruff, mypy, bandit, pytest inside a Docker container.
 Returns a structured VerificationReport.
 
-Every tool result carries a status: ``clean``, ``findings`` or ``error``. The third
-one exists because a tool that crashes says nothing, and nothing used to parse as
-"no issues". Ruff unable to write its cache to a read-only mount, mypy the same,
-a missing binary — each produced empty output, and the gate passed code it had
-not checked. A tool in the error state now fails the report and names itself in
-the summary, with what it printed.
+Every tool result carries a status: ``clean``, ``findings``, ``error`` or
+``skipped``. The third one exists because a tool that crashes says nothing, and
+nothing used to parse as "no issues". Ruff unable to write its cache to a
+read-only mount, mypy the same, a missing binary — each produced empty output,
+and the gate passed code it had not checked. A tool in the error state now fails
+the report and names itself in the summary, with what it printed. The fourth is a
+recorded decision: a repository's profile may leave a tool out, and the summary
+says so rather than showing a pass nobody earned.
 
 The classification leans on exit codes first and output second: a tool's exit
 status is the one thing it reports reliably even when its output is garbage.
@@ -17,6 +19,12 @@ against the read-only mount. Mypy and pytest need the project's dependencies —
 without them every third-party import is ``Any``, which both invents errors and
 silences real ones — so they share one container over one installed copy of the
 checkout (see :meth:`VerificationRunner._run_over_installed_copy`).
+
+What that install *is* belongs to the target repository, not to us: the image
+ships uv and no fixed interpreter, and
+:mod:`devfactory.verification.environment` reads the checkout to decide which
+Python and which install command (issue #92). A per-repository profile
+(:mod:`devfactory.verification.profiles`) can override any of it.
 """
 
 from __future__ import annotations
@@ -24,12 +32,15 @@ from __future__ import annotations
 import json
 import logging
 import re
+import shlex
 import subprocess
 from pathlib import Path
 from typing import Any
 
 from devfactory.config import settings
 from devfactory.context import VerificationReport
+from devfactory.verification.environment import VENV_DIR, TargetEnvironment, resolve_environment
+from devfactory.verification.profiles import VerificationProfile, load_profile
 
 logger = logging.getLogger(__name__)
 
@@ -43,15 +54,23 @@ CONTAINER_WORKDIR = "/workspace"
 # and _build_summary can only strip a prefix it knows in advance.
 BUILD_DIR = "/build"
 
-# The three states a tool result can be in.
+# The interpreter of the environment built for the target, and the pytest that
+# environment provides. Both are named absolutely rather than found on PATH: the
+# image also has a Python and a mypy of its own, and a gate that ran the tests
+# with the wrong one would look like it worked.
+VENV_PYTHON = f"{VENV_DIR}/bin/python"
+VENV_PYTEST = f"{VENV_DIR}/bin/pytest"
+
+# The four states a tool result can be in.
 CLEAN = "clean"
 FINDINGS = "findings"
 ERROR = "error"
+SKIPPED = "skipped"
 
 # Exit codes of our own, chosen outside every tool's range so they cannot be
 # confused with a verdict.
 _TIMED_OUT = -1  # the container did not finish within the deadline
-_SETUP_FAILED = 90  # the shared step could not `pip install .` the project
+_SETUP_FAILED = 90  # the shared step could not build the target's environment
 
 # How much of a failed tool's output reaches the summary. Enough to diagnose,
 # short enough not to drown the findings of the tools that did run.
@@ -70,18 +89,45 @@ class VerificationRunner:
     def __init__(self, image: str | None = None):
         self.image = image or settings.docker_test_image
 
-    def run(self, repo_path: Path) -> VerificationReport:
-        """Run full verification suite in Docker and return structured report."""
+    def run(self, repo_path: Path, repo: str | None = None) -> VerificationReport:
+        """Run full verification suite in Docker and return structured report.
+
+        Args:
+            repo_path: The checkout to verify.
+            repo: The target's ``owner/repo`` slug, which is the key its
+                verification profile is stored under. Without it the gate derives
+                everything from the checkout, which is what a repository with no
+                profile gets anyway.
+        """
         if not repo_path.exists():
             raise FileNotFoundError(f"Repo path not found: {repo_path}")
 
-        logger.info(f"[verification] running on {repo_path} with image={self.image}")
+        profile = load_profile(repo)
+        environment = resolve_environment(repo_path, profile)
 
-        ruff = self._run_ruff(repo_path)
-        bandit = self._run_bandit(repo_path)
-        mypy, pytest = self._run_over_installed_copy(repo_path)
+        logger.info(
+            f"[verification] running on {repo_path} with image={self.image} — "
+            f"{environment.describe()}"
+        )
+        if profile.skipped_tools:
+            logger.warning(
+                f"[verification] the profile for {repo} skips: {', '.join(profile.skipped_tools)}"
+            )
 
-        # A tool that did not run has not passed, whatever the others say.
+        ruff = (
+            self._run_ruff(repo_path, profile)
+            if profile.runs("ruff")
+            else _tool_skipped("ruff", repo, issues=[])
+        )
+        bandit = (
+            self._run_bandit(repo_path)
+            if profile.runs("bandit")
+            else _tool_skipped("bandit", repo, findings=[], severity="none")
+        )
+        mypy, pytest = self._run_over_installed_copy(repo_path, environment, profile, repo)
+
+        # A tool that did not run has not passed, whatever the others say. A tool
+        # the profile skipped is a different thing: nobody asked it to run.
         every_tool_ran = all(r["status"] != ERROR for r in (ruff, mypy, bandit, pytest))
         passed = (
             every_tool_ran
@@ -92,7 +138,9 @@ class VerificationRunner:
             and pytest["errors"] == []
         )
 
-        summary = self._build_summary(ruff, mypy, bandit, pytest, passed)
+        summary = self._build_summary(
+            ruff, mypy, bandit, pytest, passed, environment=environment.describe()
+        )
 
         return VerificationReport(
             passed=passed,
@@ -101,7 +149,25 @@ class VerificationRunner:
             bandit=bandit,
             pytest=pytest,
             summary=summary,
-            raw_output=json.dumps({"ruff": ruff, "mypy": mypy, "bandit": bandit, "pytest": pytest}),
+            raw_output=json.dumps(
+                {
+                    # The environment is part of the record, not decoration: two runs
+                    # of the same commit on different interpreters are two different
+                    # verdicts, and the evidence has to say which one this was.
+                    "environment": {
+                        "python_version": environment.python_version,
+                        "python_source": environment.python_source,
+                        "install": list(environment.install),
+                        "install_source": environment.install_source,
+                        "extras": list(environment.extras),
+                        "skipped_tools": profile.skipped_tools,
+                    },
+                    "ruff": ruff,
+                    "mypy": mypy,
+                    "bandit": bandit,
+                    "pytest": pytest,
+                }
+            ),
         )
 
     def _docker_run(self, repo_path: Path, cmd: str, timeout: int = 120) -> tuple[str, int]:
@@ -137,13 +203,14 @@ class VerificationRunner:
             return f"{partial}\n[timed out after {timeout}s]", _TIMED_OUT
         return result.stdout + result.stderr, result.returncode
 
-    def _run_ruff(self, repo_path: Path) -> dict:
+    def _run_ruff(self, repo_path: Path, profile: VerificationProfile) -> dict:
         # --no-cache: /workspace is read-only, so ruff cannot create its .ruff_cache
         # there. Without it ruff crashes — which is now an error state rather than
         # a false pass, but still not a useful run.
         # Exit codes: 0 clean, 1 violations found, 2 could not run.
+        extra = _extra_args(profile.ruff_args)
         output, code = self._docker_run(
-            repo_path, "ruff check . --no-cache --output-format=json 2>&1"
+            repo_path, f"ruff check . --no-cache --output-format=json{extra} 2>&1"
         )
         issues = _json_array(output)
         if code in (0, 1) and issues is not None and bool(issues) == (code == 1):
@@ -175,7 +242,13 @@ class VerificationRunner:
             "returncode": code,
         }
 
-    def _run_over_installed_copy(self, repo_path: Path) -> tuple[dict, dict]:
+    def _run_over_installed_copy(
+        self,
+        repo_path: Path,
+        environment: TargetEnvironment,
+        profile: VerificationProfile,
+        repo: str | None,
+    ) -> tuple[dict, dict]:
         """Run mypy and pytest in one container, over one installed copy of the repo.
 
         The test image ships the verification tools, not the candidate project's
@@ -186,9 +259,10 @@ class VerificationRunner:
         installed — and installing it twice, once per container, would pay the
         same price twice, so they share a container.
 
-        ``pip install .`` writes ``<pkg>.egg-info`` into the source tree, which
-        the read-only mount forbids, so the checkout is copied to
-        :data:`BUILD_DIR` first. The candidate checkout stays untouched.
+        The install writes into the source tree — ``.venv``, ``<pkg>.egg-info``,
+        a lockfile uv may refresh — which the read-only mount forbids, so the
+        checkout is copied to :data:`BUILD_DIR` first. The candidate checkout
+        stays untouched.
 
         A failed install exits with a code of our own: neither tool ran, and both
         are reported as the environment failing rather than one as a mysterious
@@ -197,42 +271,86 @@ class VerificationRunner:
         Returns:
             The mypy result and the pytest result, in that order.
         """
-        # Measured 2026-09-09, two runs each, on a clean export of this repository
-        # with the image already built: 19.0s / 20.6s before (four containers),
-        # 22.3s / 22.2s after (three). About 2.5s per verification run, and the
-        # install that dominates both — 16-18s of it — is the price the pytest
-        # step already paid. What grew is mypy itself: with the dependencies
-        # resolved it has real types to check instead of Any.
+        wants_mypy, wants_pytest = profile.runs("mypy"), profile.runs("pytest")
+        if not wants_mypy and not wants_pytest:
+            # Nothing to install for: skip the expensive container entirely.
+            return (
+                _tool_skipped("mypy", repo, errors=[]),
+                _tool_skipped("pytest", repo, passed=0, failed=0, errors=[]),
+            )
+
+        # Measured 2026-09-10, two runs each, images built, cold container (no uv
+        # cache survives a run). Whole gate, all four tools: 14.4s / 15.1s for
+        # news-watch (uv sync from a lockfile, 210 tests), 17.7s / 17.9s for
+        # biz-explore (numpy + langchain from requirements.txt, 188 tests), 17.4s /
+        # 19.2s for this repository — where the same gate took 22.2s / 22.3s with
+        # `pip install .` (issue #77). This step is most of that time, and uv is
+        # why installing a target's dependencies is seconds rather than minutes;
+        # the interpreters are baked into the image, only the wheels are fetched.
         #
-        # Setuptools builds in-tree, so `pip install .` leaves ./build/lib holding
-        # a second copy of the package. mypy refuses to check a tree with two
-        # modules of the same name ("Duplicate module named ..."), which is an
-        # exit 2 — a tool that did not run. Removing what the install created puts
-        # the copy back in the shape CI type-checks, so the two agree; a `build/`
-        # the candidate had of its own is left alone, because CI would trip over
-        # that one too and the gate must not be more forgiving than CI.
-        cmd = (
-            f"mkdir -p {BUILD_DIR}; cp -r {CONTAINER_WORKDIR}/. {BUILD_DIR}/ 2>/dev/null; "
-            f"cd {BUILD_DIR}; "
-            "if [ -f pyproject.toml ] || [ -f setup.py ]; then "
-            "if [ -d build ]; then OWN_BUILD=1; else OWN_BUILD=0; fi; "
-            f"pip install -q . 2>&1 || exit {_SETUP_FAILED}; "
-            'if [ "$OWN_BUILD" = 0 ]; then rm -rf build; fi; '
-            "fi; "
+        # Setuptools builds in-tree, so an install can leave ./build holding a
+        # second copy of the package. mypy refuses to check a tree with two modules
+        # of the same name ("Duplicate module named ..."), which is an exit 2 — a
+        # tool that did not run. Removing what the install created puts the copy
+        # back in the shape CI type-checks, so the two agree; a `build/` the
+        # candidate had of its own is left alone, because CI would trip over that
+        # one too and the gate must not be more forgiving than CI.
+        steps = [
+            f"mkdir -p {BUILD_DIR}",
+            f"cp -r {CONTAINER_WORKDIR}/. {BUILD_DIR}/ 2>/dev/null",
+            f"cd {BUILD_DIR}",
+            # Exported once, for every `uv pip install` below: uv installs into the
+            # virtualenv this names, which is the target's environment and not the
+            # image's own Python.
+            f"export VIRTUAL_ENV={VENV_DIR}",
+            "if [ -d build ]; then OWN_BUILD=1; else OWN_BUILD=0; fi",
+        ]
+        steps += [f"{command} || exit {_SETUP_FAILED}" for command in environment.commands]
+        # pytest has to come from the target's environment — it imports the code
+        # under test and every plugin the suite declares — but a target is not
+        # obliged to depend on it (biz-explore keeps it in requirements-dev.txt,
+        # another might keep it nowhere). Adding it only when it is missing leaves
+        # a target that ships its own pytest, and its own plugins, untouched.
+        steps.append(
+            f"{VENV_PYTHON} -c 'import pytest' >/dev/null 2>&1 "
+            f"|| uv pip install -q pytest || exit {_SETUP_FAILED}"
+        )
+        steps.append('if [ "$OWN_BUILD" = 0 ]; then rm -rf build; fi')
+
+        if wants_mypy:
             # --cache-dir in /tmp: keep mypy's cache out of the tree it reports on,
             # so the copy stays a faithful image of the candidate checkout.
-            f"echo '{_MARKER.format('MYPY')}'; "
-            "mypy . --ignore-missing-imports --cache-dir=/tmp/mypy_cache 2>&1; "
-            f'echo "{_EXIT_MARKER.format("MYPY")}$?##"; '
-            f"echo '{_MARKER.format('PYTEST')}'; "
-            "pytest --tb=short -q 2>&1; "
-            f'echo "{_EXIT_MARKER.format("PYTEST")}$?##"'
+            # --python-executable: mypy stays the image's, pinned across every
+            # target, while resolving the *target's* installed dependencies.
+            steps += [
+                f"echo '{_MARKER.format('MYPY')}'",
+                f"mypy . --ignore-missing-imports --cache-dir=/tmp/mypy_cache "
+                f"--python-executable {VENV_PYTHON}{_extra_args(profile.mypy_args)} 2>&1",
+                f'echo "{_EXIT_MARKER.format("MYPY")}$?##"',
+            ]
+        if wants_pytest:
+            # No -q, deliberately. Verbosity is cumulative and the target's own
+            # `addopts` are applied on top of ours: news-watch sets `-q`, our `-q`
+            # made it `-qq`, and at -qq pytest prints no "N passed" line at all —
+            # so a suite of 210 passing tests came back as "exited 0 with output
+            # that is not a verdict". Default verbosity prints one character per
+            # test and the summary line the classification needs.
+            steps += [
+                f"echo '{_MARKER.format('PYTEST')}'",
+                f"{VENV_PYTEST} --tb=short{_extra_args(profile.pytest_args)} 2>&1",
+                f'echo "{_EXIT_MARKER.format("PYTEST")}$?##"',
+            ]
+
+        output, code = self._docker_run(
+            repo_path, "; ".join(steps), timeout=settings.verification_timeout_s
         )
-        # The timeout pytest already had: the install dominates it either way.
-        output, code = self._docker_run(repo_path, cmd, timeout=300)
 
         if code == _SETUP_FAILED:
-            reason = "the project could not be installed (`pip install .` failed)"
+            reason = (
+                "the target's environment could not be built "
+                f"(install derived from {environment.install_source}, "
+                f"python {environment.python_version})"
+            )
             return (
                 _tool_error("mypy", output, code, reason=reason, errors=[]),
                 _tool_error("pytest", output, code, reason=reason, passed=0, failed=0, errors=[]),
@@ -241,25 +359,41 @@ class VerificationRunner:
         # A section is missing when the step died before reaching that tool — a
         # timeout, or a shell that never started. The tool did not run, and the
         # whole combined output is the best evidence we have of why.
-        mypy_section = _section(output, "MYPY")
-        pytest_section = _section(output, "PYTEST")
-        mypy = (
-            _classify_mypy(*mypy_section)
-            if mypy_section
-            else _tool_error("mypy", output, code, errors=[])
-        )
-        pytest = (
-            _classify_pytest(*pytest_section)
-            if pytest_section
-            else _tool_error("pytest", output, code, passed=0, failed=0, errors=[])
-        )
+        if wants_mypy:
+            section = _section(output, "MYPY")
+            mypy = (
+                _classify_mypy(*section)
+                if section
+                else _tool_error("mypy", output, code, errors=[])
+            )
+        else:
+            mypy = _tool_skipped("mypy", repo, errors=[])
+        if wants_pytest:
+            section = _section(output, "PYTEST")
+            pytest = (
+                _classify_pytest(*section)
+                if section
+                else _tool_error("pytest", output, code, passed=0, failed=0, errors=[])
+            )
+        else:
+            pytest = _tool_skipped("pytest", repo, passed=0, failed=0, errors=[])
         return mypy, pytest
 
     def _build_summary(
-        self, ruff: dict, mypy: dict, bandit: dict, pytest: dict, passed: bool
+        self,
+        ruff: dict,
+        mypy: dict,
+        bandit: dict,
+        pytest: dict,
+        passed: bool,
+        environment: str = "",
     ) -> str:
         lines = ["## Verification Report\n"]
         lines.append(f"**Overall: {'✓ PASSED' if passed else '✗ FAILED'}**\n")
+        if environment:
+            # The reader of a report has to know what it was produced against: the
+            # same commit verified on another interpreter is another verdict.
+            lines.append(f"*Environment: {environment}*\n")
 
         ruff_count = len(ruff.get("issues", []))
         lines.append(f"- **Ruff (lint):** {_status_or(ruff, f'{ruff_count} issue(s)')}")
@@ -291,11 +425,8 @@ class VerificationRunner:
         # A tool that did not run is named, with what it printed: the developer
         # cannot fix a finding nobody made, but it can often fix what stopped the
         # tool — a syntax error, a missing dependency, a broken pyproject.
-        failed_tools = [
-            (name, r)
-            for name, r in (("ruff", ruff), ("mypy", mypy), ("bandit", bandit), ("pytest", pytest))
-            if r.get("status") == ERROR
-        ]
+        named = (("ruff", ruff), ("mypy", mypy), ("bandit", bandit), ("pytest", pytest))
+        failed_tools = [(name, r) for name, r in named if r.get("status") == ERROR]
         if failed_tools:
             lines.append("\n### Tools that did not run:")
             for name, r in failed_tools:
@@ -303,6 +434,14 @@ class VerificationRunner:
                 tail = (r.get("raw") or "").strip()[-_RAW_TAIL:]
                 if tail:
                     lines.append(f"  ```\n{tail}\n  ```")
+
+        # A skipped tool is a decision someone recorded in the profile, so the
+        # report names it and its reason. Silence here would read as a pass.
+        skipped = [(name, r) for name, r in named if r.get("status") == SKIPPED]
+        if skipped:
+            lines.append("\n### Tools the profile does not run:")
+            for name, r in skipped:
+                lines.append(f"- **{name}**: {r['skipped']}")
 
         # The summary is fed back to the developer agent on a verification retry, and that
         # agent works in the host workspace — "/workspace/devfactory/foo.py" is a
@@ -312,6 +451,13 @@ class VerificationRunner:
         # receives repo-relative paths it can actually open.
         text = "\n".join(lines)
         return text.replace(f"{CONTAINER_WORKDIR}/", "").replace(f"{BUILD_DIR}/", "")
+
+
+def _extra_args(args: list[str]) -> str:
+    """Profile-supplied arguments, quoted, ready to append to a shell command."""
+    if not args:
+        return ""
+    return " " + " ".join(shlex.quote(arg) for arg in args)
 
 
 def _section(output: str, tool: str) -> tuple[str, int] | None:
@@ -386,8 +532,30 @@ def _tool_error(tool: str, output: str, code: int, reason: str | None = None, **
     return {"status": ERROR, "error": reason, "raw": output, "returncode": code, **empty}
 
 
+def _tool_skipped(tool: str, repo: str | None, **empty) -> dict:
+    """A result the profile excluded, keeping the keys the scorer reads (empty).
+
+    Distinct from the error state on purpose: nothing failed, and nothing passed
+    either. The report names it so the omission is visible wherever the report is.
+    """
+    where = f"the verification profile for {repo}" if repo else "the verification profile"
+    logger.info(f"[verification] {tool} is not part of the gate for this repository")
+    return {
+        "status": SKIPPED,
+        "skipped": f"not part of the gate for this repository ({where})",
+        "raw": "",
+        "returncode": 0,
+        **empty,
+    }
+
+
 def _status_or(result: dict, detail: str) -> str:
-    return "did not run" if result.get("status") == ERROR else detail
+    status = result.get("status")
+    if status == ERROR:
+        return "did not run"
+    if status == SKIPPED:
+        return "skipped by the profile"
+    return detail
 
 
 def _json_array(output: str) -> list | None:

@@ -26,6 +26,7 @@ See [Vision & compliance](#vision--compliance).
 - [Installation](#installation)
 - [Configuration](#configuration)
 - [First-time setup](#first-time-setup)
+- [Onboarding a repository](#onboarding-a-repository)
 - [Usage](#usage)
 - [Adding models](#adding-models)
 - [Knowledge base & scoring](#knowledge-base--scoring)
@@ -261,10 +262,37 @@ Run the `init` command once per repository. It:
 2. Builds the Docker verification image.
 3. Checks that Ollama is reachable.
 4. Initialises the SQLite database.
+5. Runs the verification gate on the repository's default branch, tool by tool.
 
 ```bash
 devfactory init --repo owner/repo
 ```
+
+Step 5 decides the outcome: `init` exits non-zero when the gate does not pass,
+because a repository whose default branch already fails verification fails it on
+every run, whatever the developer agent produces.
+
+---
+
+## Onboarding a repository
+
+The verification image pins no Python: it ships `uv`, and the target repository
+decides. Per run, the gate reads the checkout — `requires-python`, a lockfile, a
+`pyproject.toml`, a `requirements.txt` — and builds what the repository declares.
+Anything it cannot derive goes in a small per-repository profile, versioned here
+rather than in the target, since a client repository must not need to know that we
+exist:
+
+```bash
+devfactory gate check --repo owner/repo          # the gate, on the default branch
+devfactory gate check --repo owner/repo --path .  # on a local checkout
+```
+
+Exit codes: 0 the repository passes its own gate, 1 the target's own suite fails,
+2 the gate itself could not run.
+
+📄 **The checklist, the derived defaults and the known limits:
+[docs/onboarding.md](docs/onboarding.md).**
 
 ---
 
@@ -416,6 +444,9 @@ devfactory/
 │   ├── verification/
 │   │   ├── autofix.py       # Deterministic ruff pass before the gates
 │   │   ├── scope.py         # Did the change touch the files the task declared?
+│   │   ├── environment.py   # Which Python and which install, read from the target
+│   │   ├── profiles.py      # Per-repository verification profiles
+│   │   ├── dry_run.py       # The gate outside a run, for onboarding
 │   │   └── runner.py        # Docker verification execution (ruff/mypy/bandit/pytest)
 │   ├── github/
 │   │   ├── client.py        # Lazy PyGitHub singleton
@@ -445,8 +476,11 @@ devfactory/
 │   └── reviewer.md          # Reviewer system prompt
 ├── docker/
 │   └── Dockerfile.test      # Verification test environment
+├── profiles/
+│   └── verification.toml    # Per-repository verification profiles (optional overrides)
 ├── docs/
-│   └── VISION.md            # Product direction + compliance architecture & roadmap
+│   ├── VISION.md            # Product direction + compliance architecture & roadmap
+│   └── onboarding.md        # Onboarding a target repository, step by step
 ├── tests/                   # Unit tests (no Ollama or GitHub required)
 ├── .env.example             # Environment variable template
 ├── CLAUDE.md                # Claude Code instructions for this repo

@@ -9,6 +9,10 @@ Since issue #77 mypy and pytest share one container over one installed copy of
 the repo, so scripting them means scripting one marker-framed stream — see
 :func:`_combined`. Tests that need to script the shared step as a whole (a failed
 install, a container that died mid-step) pass ``combined=`` instead.
+
+Since issue #92 that step also *builds* the target's environment, from what the
+repository declares. The last section asserts those decisions the only way that
+matters: through the command the runner sends to the container.
 """
 
 from __future__ import annotations
@@ -17,10 +21,12 @@ import json
 
 import pytest
 
+from devfactory.verification import profiles
 from devfactory.verification.runner import (
     CLEAN,
     ERROR,
     FINDINGS,
+    SKIPPED,
     VerificationRunner,
 )
 
@@ -45,9 +51,16 @@ def _combined(mypy: tuple[str, int], pytest_: tuple[str, int]) -> tuple[str, int
 
 
 def _runner(
-    monkeypatch, combined: tuple[str, int] | None = None, **scripted: tuple[str, int]
+    monkeypatch,
+    combined: tuple[str, int] | None = None,
+    recorded: list[str] | None = None,
+    **scripted: tuple[str, int],
 ) -> VerificationRunner:
-    """A runner whose container answers are scripted per tool, others clean."""
+    """A runner whose container answers are scripted per tool, others clean.
+
+    ``recorded`` collects every command the runner sends to a container, which is
+    how the tests below assert what the prepare step decided to run.
+    """
     answers = {
         "ruff": _RUFF_CLEAN,
         "mypy": _MYPY_CLEAN,
@@ -57,6 +70,8 @@ def _runner(
     }
 
     def fake_docker_run(self, repo_path, cmd, timeout=120):
+        if recorded is not None:
+            recorded.append(cmd)
         # Ruff and bandit each get their own container; the shared mypy+pytest
         # step is the one left, and its command names both tools, so it cannot be
         # matched by tool name any more.
@@ -70,8 +85,17 @@ def _runner(
     return VerificationRunner(image="test-image")
 
 
-def _report(monkeypatch, tmp_path, combined=None, **scripted):
-    return _runner(monkeypatch, combined, **scripted).run(tmp_path)
+def _report(monkeypatch, tmp_path, combined=None, repo=None, recorded=None, **scripted):
+    return _runner(monkeypatch, combined, recorded, **scripted).run(tmp_path, repo=repo)
+
+
+def _prepare_command(monkeypatch, repo_path, repo=None) -> str:
+    """The command of the shared mypy+pytest step, which carries the prepare step."""
+    recorded: list[str] = []
+    _report(monkeypatch, repo_path, repo=repo, recorded=recorded)
+    shared = [cmd for cmd in recorded if "mypy" in cmd]
+    assert len(shared) == 1, recorded
+    return shared[0]
 
 
 # ── Everything clean ─────────────────────────────────────────────────────────
@@ -244,14 +268,19 @@ def test_pytest_that_printed_nothing_is_an_error(monkeypatch, tmp_path):
 
 def test_a_project_that_cannot_be_installed_puts_both_tools_in_error(monkeypatch, tmp_path):
     """The install is the shared step's first act. If it fails, neither mypy nor
-    pytest ran, and neither may be reported as anything but an error."""
-    output = "ERROR: Could not find a version that satisfies the requirement nonexistent>=9"
+    pytest ran, and neither may be reported as anything but an error — with the
+    reason naming what the gate tried to install, since that is what the reader
+    has to correct."""
+    (tmp_path / "requirements.txt").write_text("nonexistent>=9\n")
+    output = "error: distribution nonexistent>=9 was not found in the package registry"
     report = _report(monkeypatch, tmp_path, combined=(output, 90))
 
     assert report.mypy["status"] == ERROR
     assert report.pytest["status"] == ERROR
-    assert "pip install" in report.mypy["error"]
-    assert "pip install" in report.pytest["error"]
+    for reason in (report.mypy["error"], report.pytest["error"]):
+        assert "environment could not be built" in reason
+        assert "requirements.txt" in reason
+    assert "was not found" in report.summary
     assert report.passed is False
 
 
@@ -342,3 +371,182 @@ def test_any_single_tool_in_error_fails_the_report(monkeypatch, tmp_path, tool):
     report = _report(monkeypatch, tmp_path, **{tool: ("", 0)})
 
     assert report.passed is False
+
+
+# ── The target's environment (issue #92) ─────────────────────────────────────
+#
+# The gate no longer assumes Python 3.11 and `pip install .`: the prepare step
+# reads the repository and builds what it declares. These tests assert the
+# decision through the command the runner actually sends to the container, which
+# is the only thing the container ever sees.
+
+
+def test_a_lockfile_is_installed_with_uv_sync(monkeypatch, tmp_path):
+    """A resolved dependency set is installed as resolved — `--frozen`, so a
+    lockfile that no longer matches its pyproject.toml is reported rather than
+    silently re-resolved."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "t"\nrequires-python = ">=3.12"\n')
+    (tmp_path / "uv.lock").write_text("version = 1\n")
+
+    cmd = _prepare_command(monkeypatch, tmp_path)
+
+    assert "uv sync --frozen --python 3.12" in cmd
+    # The lockfile installs the project; the only `uv pip install` left is the
+    # fallback that adds pytest when the target ships none.
+    assert "uv pip install -e" not in cmd
+    assert "uv pip install -r" not in cmd
+
+
+def test_a_bare_pyproject_is_installed_editable_with_its_test_extras(monkeypatch, tmp_path):
+    """Editable, so the checkout stays the only copy of the code: a second copy in
+    site-packages is what makes mypy report a duplicate module (issue #77)."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "t"\nrequires-python = ">=3.11"\n'
+        '[project.optional-dependencies]\ndev = ["pytest"]\naudit = ["something"]\n'
+    )
+
+    cmd = _prepare_command(monkeypatch, tmp_path)
+
+    assert "uv pip install -e '.[dev]'" in cmd
+    # `audit` is an optional integration, not a test extra: installing it because
+    # it exists would install a cloud dependency nobody asked for.
+    assert "audit" not in cmd
+
+
+def test_requirements_files_are_installed_including_the_dev_ones(monkeypatch, tmp_path):
+    """The shape with the least information: no interpreter declared, and the test
+    dependencies in a second file that has to be installed too, or the suite
+    cannot run at all."""
+    (tmp_path / "requirements.txt").write_text("numpy>=2\n")
+    (tmp_path / "requirements-dev.txt").write_text("pytest>=8\n")
+
+    cmd = _prepare_command(monkeypatch, tmp_path)
+
+    assert "uv pip install -r requirements.txt -r requirements-dev.txt" in cmd
+    assert "uv python install 3.12" in cmd  # the documented default
+
+
+def test_a_repository_declaring_nothing_still_gets_an_environment(monkeypatch, tmp_path):
+    """Nothing to install is not nothing to do: the virtualenv still has to exist,
+    and pytest still has to come from it."""
+    cmd = _prepare_command(monkeypatch, tmp_path)
+
+    assert "uv venv --python 3.12 /build/.venv" in cmd
+    assert "/build/.venv/bin/python -c 'import pytest'" in cmd
+    assert "/build/.venv/bin/pytest" in cmd
+
+
+def test_mypy_resolves_the_targets_dependencies_without_being_installed_into_them(
+    monkeypatch, tmp_path
+):
+    """The image's mypy, the target's site-packages. `--python-executable` is what
+    keeps the gate's mypy version fixed across targets while still resolving real
+    types instead of Any (issue #77)."""
+    cmd = _prepare_command(monkeypatch, tmp_path)
+
+    assert "mypy . --ignore-missing-imports" in cmd
+    assert "--python-executable /build/.venv/bin/python" in cmd
+
+
+def test_the_profile_overrides_what_the_repository_declares(monkeypatch, tmp_path):
+    """biz-explore's case: the repository declares no interpreter and its CI knows
+    which one it uses. The profile is where that is recorded."""
+    profile = tmp_path / "verification.toml"
+    profile.write_text('["owner/target"]\npython_version = "3.14"\nextras = ["test", "audit"]\n')
+    monkeypatch.setattr(profiles, "PROFILES_PATH", profile)
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+    (repo / "pyproject.toml").write_text('[project]\nname = "t"\nrequires-python = ">=3.11"\n')
+    (repo / "uv.lock").write_text("version = 1\n")
+
+    cmd = _prepare_command(monkeypatch, repo, repo="owner/target")
+
+    assert "uv python install 3.14" in cmd
+    assert "uv sync --frozen --python 3.14 --extra test --extra audit" in cmd
+
+
+def test_a_repository_with_no_profile_gets_the_derived_defaults(monkeypatch, tmp_path):
+    """The common case, and the one that must need no entry anywhere."""
+    profile = tmp_path / "verification.toml"
+    profile.write_text('["someone/else"]\npython_version = "3.14"\n')
+    monkeypatch.setattr(profiles, "PROFILES_PATH", profile)
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+    (repo / "pyproject.toml").write_text('[project]\nname = "t"\nrequires-python = ">=3.13"\n')
+
+    cmd = _prepare_command(monkeypatch, repo, repo="owner/unknown")
+
+    assert "uv python install 3.13" in cmd
+    assert "3.14" not in cmd
+
+
+def test_extra_tool_arguments_from_the_profile_reach_the_tools(monkeypatch, tmp_path):
+    profile = tmp_path / "verification.toml"
+    profile.write_text(
+        '["owner/target"]\nruff_args = ["--select", "E,F"]\n'
+        'mypy_args = ["--strict"]\npytest_args = ["-x"]\n'
+    )
+    monkeypatch.setattr(profiles, "PROFILES_PATH", profile)
+    recorded: list[str] = []
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+
+    _report(monkeypatch, repo, repo="owner/target", recorded=recorded)
+
+    ruff_cmd = next(cmd for cmd in recorded if cmd.startswith("ruff"))
+    shared = next(cmd for cmd in recorded if "mypy" in cmd)
+    assert "--select E,F" in ruff_cmd
+    assert "--strict" in shared
+    assert "/build/.venv/bin/pytest --tb=short -x" in shared
+
+
+def test_a_tool_the_profile_excludes_is_skipped_not_passed(monkeypatch, tmp_path):
+    """A tool nobody ran must not read as a tool that found nothing — the report
+    names it and says whose decision it was."""
+    profile = tmp_path / "verification.toml"
+    profile.write_text('["owner/target"]\ntools = ["ruff", "pytest"]\n')
+    monkeypatch.setattr(profiles, "PROFILES_PATH", profile)
+    recorded: list[str] = []
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+
+    report = _report(monkeypatch, repo, repo="owner/target", recorded=recorded)
+
+    assert report.mypy["status"] == SKIPPED
+    assert report.bandit["status"] == SKIPPED
+    assert report.ruff["status"] == CLEAN
+    assert report.pytest["status"] == CLEAN
+    # Skipping does not fail the report — it is a recorded decision — but the
+    # report has to carry it wherever it goes.
+    assert report.passed is True
+    assert "Tools the profile does not run" in report.summary
+    assert "**mypy**" in report.summary
+    assert not any(cmd.startswith("bandit") for cmd in recorded)
+    assert "mypy . --ignore-missing-imports" not in " ".join(recorded)
+
+
+def test_both_tools_of_the_shared_step_excluded_skips_the_container(monkeypatch, tmp_path):
+    """No install is worth paying for when nothing would use it."""
+    profile = tmp_path / "verification.toml"
+    profile.write_text('["owner/target"]\ntools = ["ruff", "bandit"]\n')
+    monkeypatch.setattr(profiles, "PROFILES_PATH", profile)
+    recorded: list[str] = []
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+
+    report = _report(monkeypatch, repo, repo="owner/target", recorded=recorded)
+
+    assert report.mypy["status"] == SKIPPED
+    assert report.pytest["status"] == SKIPPED
+    assert not any("uv venv" in cmd for cmd in recorded)
+
+
+def test_the_summary_records_the_environment_the_verdict_was_produced_in(monkeypatch, tmp_path):
+    """The same commit verified on another interpreter is another verdict, and the
+    evidence has to say which one this was."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "t"\nrequires-python = ">=3.13"\n')
+
+    report = _report(monkeypatch, tmp_path)
+
+    assert "python 3.13 (from requires-python >=3.13)" in report.summary
+    assert '"python_source": "requires-python >=3.13"' in report.raw_output

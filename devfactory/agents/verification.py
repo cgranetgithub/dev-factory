@@ -33,8 +33,10 @@ class VerificationAgent(BaseAgent):
         repo_path = settings.workspace / ctx.repo_name
         logger.info(f"[verification] running verification on {repo_path}")
 
-        # 1. Run tools in Docker, get structured report
-        report = self._runner.run(repo_path)
+        # 1. Run tools in Docker, get structured report. The slug is what the
+        # target's verification profile is keyed on — which Python, which install,
+        # which tools — so the gate has to know which repository it is verifying.
+        report = self._runner.run(repo_path, repo=ctx.issue.repo)
         ctx.verification_report = report
 
         # 2. Log result summary
