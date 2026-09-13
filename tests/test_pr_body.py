@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from devfactory.context import GitHubIssue, PipelineContext, TaskSpec
+from devfactory.context import GitHubIssue, PipelineContext, TaskSpec, VerificationReport
 from devfactory.github import pr, spec_issue
 
 
@@ -73,3 +73,66 @@ def test_a_pr_body_cannot_be_built_without_a_published_spec():
     is built from the specification, which is read from that issue."""
     with pytest.raises(spec_issue.SpecNotPublishedError, match="issue #1"):
         pr._build_pr_body(_ctx(spec_issue_number=None))
+
+
+def _differential_report(inherited: int, fixed: int, introduced: list[str]) -> VerificationReport:
+    """A verification report as the differential verdict leaves it (issue #104)."""
+    return VerificationReport(
+        passed=not introduced,
+        ruff={"status": "findings", "issues": []},
+        mypy={"status": "clean", "errors": []},
+        bandit={"status": "clean", "findings": [], "severity": "none"},
+        pytest={"status": "clean", "passed": 10, "failed": 0, "errors": []},
+        summary="## Verification Report\n\n*Pass rule: differential*",
+        raw_output="{}",
+        rule="differential",
+        differential={
+            "rule": "differential",
+            "reason": "",
+            "baseline": {
+                "repo": "o/r",
+                "base_sha": "a5ac825e1f2b3c4d",
+                "recorded_at": "2026-09-13T10:00:00",
+                "cached": True,
+            },
+            "tools": {
+                "ruff": {
+                    "rule": "differential",
+                    "reason": "",
+                    "status": "findings",
+                    "introduced": introduced,
+                    "inherited_count": inherited,
+                    "inherited_sample": [],
+                    "fixed_count": fixed,
+                    "fixed_sample": [],
+                }
+            },
+        },
+    )
+
+
+def test_the_pr_body_shows_the_standing_debt_the_change_inherited(published_spec):
+    """A differential gate passes a change on a repository that is not clean, so the
+    body says what was already there and which commit that was measured on — the
+    evidence rule in CLAUDE.md: reported, never dropped."""
+    ctx = _ctx()
+    ctx.verification_report = _differential_report(inherited=67, fixed=2, introduced=[])
+
+    body = pr._build_pr_body(ctx)
+
+    assert "Inherited findings — already present before this change" in body
+    assert "`o/r@a5ac825e`" in body
+    assert "| ruff | 67 | 2 |" in body
+
+
+def test_an_absolute_verdict_claims_nothing_about_inherited_findings(published_spec):
+    """Nothing is attributed under the absolute rule, so nothing is tabulated."""
+    ctx = _ctx()
+    report = _differential_report(inherited=0, fixed=0, introduced=[])
+    report.rule = "absolute"
+    report.differential = {"rule": "absolute", "reason": "no baseline", "tools": {}}
+    ctx.verification_report = report
+
+    body = pr._build_pr_body(ctx)
+
+    assert "Inherited findings" not in body

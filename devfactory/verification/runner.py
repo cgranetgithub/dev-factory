@@ -78,6 +78,12 @@ _RAW_TAIL = 1500
 
 _COUNT = re.compile(r"(\d+) (passed|failed|error)")
 
+# Stamped on every summary this module writes — see _build_summary. A verdict
+# whose rule is invisible is not evidence.
+ABSOLUTE_RULE_LINE = (
+    "*Pass rule: absolute — every finding counts, whatever the base branch holds.*\n"
+)
+
 # Mypy and pytest write into one stream, so the step frames each one's output and
 # echoes its exit code. The framing is deliberately unlike anything either tool
 # prints, so a finding quoting a marker cannot forge a section boundary.
@@ -149,6 +155,7 @@ class VerificationRunner:
             bandit=bandit,
             pytest=pytest,
             summary=summary,
+            environment=environment.describe(),
             raw_output=json.dumps(
                 {
                     # The environment is part of the record, not decoration: two runs
@@ -390,23 +397,30 @@ class VerificationRunner:
     ) -> str:
         lines = ["## Verification Report\n"]
         lines.append(f"**Overall: {'✓ PASSED' if passed else '✗ FAILED'}**\n")
+        # Which rule produced the verdict, always. This one is the absolute rule.
+        # A run inside the pipeline is re-judged against the base branch afterwards
+        # and its summary rewritten (:mod:`devfactory.verification.differential`);
+        # what is left reading this line is the gate asked on its own —
+        # `devfactory gate check` — where "is this repository clean?" is the
+        # question, and the answer is the baseline every later verdict rests on.
+        lines.append(ABSOLUTE_RULE_LINE)
         if environment:
             # The reader of a report has to know what it was produced against: the
             # same commit verified on another interpreter is another verdict.
             lines.append(f"*Environment: {environment}*\n")
 
         ruff_count = len(ruff.get("issues", []))
-        lines.append(f"- **Ruff (lint):** {_status_or(ruff, f'{ruff_count} issue(s)')}")
+        lines.append(f"- **Ruff (lint):** {status_or(ruff, f'{ruff_count} issue(s)')}")
 
         mypy_count = len(mypy.get("errors", []))
-        lines.append(f"- **Mypy (types):** {_status_or(mypy, f'{mypy_count} error(s)')}")
+        lines.append(f"- **Mypy (types):** {status_or(mypy, f'{mypy_count} error(s)')}")
 
         sev = bandit.get("severity", "none")
-        lines.append(f"- **Bandit (security):** {_status_or(bandit, f'severity={sev}')}")
+        lines.append(f"- **Bandit (security):** {status_or(bandit, f'severity={sev}')}")
 
         p, f = pytest.get("passed", 0), pytest.get("failed", 0)
         ran = f"{p} passed, {f} failed" if (p or f) else "no tests collected"
-        lines.append(f"- **Pytest:** {_status_or(pytest, ran)}")
+        lines.append(f"- **Pytest:** {status_or(pytest, ran)}")
 
         if not passed:
             lines.append("\n### Issues to fix:")
@@ -549,7 +563,7 @@ def _tool_skipped(tool: str, repo: str | None, **empty) -> dict:
     }
 
 
-def _status_or(result: dict, detail: str) -> str:
+def status_or(result: dict, detail: str) -> str:
     status = result.get("status")
     if status == ERROR:
         return "did not run"

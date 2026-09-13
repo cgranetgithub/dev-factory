@@ -90,11 +90,35 @@ CREATE TABLE IF NOT EXISTS control_snapshots (
     previous_id   INTEGER REFERENCES control_snapshots(id)
 );
 
+-- One row per verification gate run on a base commit, keyed by (repo, base SHA).
+-- Two things at once, which is why it is worth a table:
+--   * a cache. The differential verdict (issue #104) needs the base branch's own
+--     report to tell an introduced finding from an inherited one, and re-running
+--     the gate on the base for every iteration would triple the cost of a loop
+--     that already runs three times;
+--   * an audit record. "This is what was already wrong at <sha>, measured at
+--     <recorded_at>" is the evidence behind every later "this change introduced
+--     no new findings".
+-- Append-only, like control_snapshots: a baseline is a measurement of an
+-- immutable commit, so a new measurement is a new row and never an UPDATE. Reads
+-- take the most recent row for a SHA, which is how a baseline whose tools errored
+-- can be superseded without erasing the record that it happened.
+CREATE TABLE IF NOT EXISTS verification_baselines (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo              TEXT NOT NULL,
+    base_sha          TEXT NOT NULL,
+    recorded_at       TEXT NOT NULL,   -- UTC, ISO-8601, written by the caller
+    passed            INTEGER NOT NULL,-- did the base commit pass its own gate
+    environment       TEXT NOT NULL DEFAULT '',
+    fingerprints_json TEXT NOT NULL    -- per tool: its status and its finding keys
+);
+
 CREATE INDEX IF NOT EXISTS idx_executions_task   ON executions(task_id);
 CREATE INDEX IF NOT EXISTS idx_executions_model  ON executions(model_id);
 CREATE INDEX IF NOT EXISTS idx_scores_execution  ON scores(execution_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_issue       ON tasks(github_issue_id);
 CREATE INDEX IF NOT EXISTS idx_control_repo      ON control_snapshots(repo, id);
+CREATE INDEX IF NOT EXISTS idx_baseline_repo_sha ON verification_baselines(repo, base_sha, id);
 """
 
 # Columns added to SCHEMA after the first databases were created. `_ensure_db`
@@ -326,6 +350,70 @@ class Database:
         with self._conn() as conn:
             rows = conn.execute(
                 "SELECT * FROM control_snapshots WHERE repo=? ORDER BY id DESC LIMIT ?",
+                (repo, limit),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    # ── Verification baselines ─────────────────────────────────────────────────
+    #
+    # Insert and read only, for the same reason as the control snapshots above: a
+    # baseline is a measurement of a commit that cannot change, and it is the
+    # evidence behind every differential verdict built on it. There is deliberately
+    # no update and no delete — a re-measurement is a new row.
+
+    def record_verification_baseline(
+        self,
+        repo: str,
+        base_sha: str,
+        recorded_at: str,
+        passed: bool,
+        fingerprints_json: str,
+        environment: str = "",
+    ) -> int:
+        """Append the gate's reading of one base commit and return its id.
+
+        Args:
+            repo: Repository in ``owner/repo`` form.
+            base_sha: The commit the reading was taken on. Full SHA.
+            recorded_at: UTC ISO-8601 timestamp of the reading.
+            passed: Whether the base commit passes its own gate absolutely.
+            fingerprints_json: Per tool, its status and its finding keys — see
+                ``devfactory.verification.differential.fingerprints``.
+            environment: What the gate built to take the reading, so two readings
+                of one commit on different interpreters stay distinguishable.
+
+        Returns:
+            The id of the inserted row.
+        """
+        with self._conn() as conn:
+            cur = conn.execute(
+                """INSERT INTO verification_baselines
+                   (repo, base_sha, recorded_at, passed, environment, fingerprints_json)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (repo, base_sha, recorded_at, int(passed), environment, fingerprints_json),
+            )
+            return int(cur.lastrowid)
+
+    def verification_baseline(self, repo: str, base_sha: str) -> dict | None:
+        """The most recent reading for ``(repo, base_sha)``, or None.
+
+        The most recent rather than the first: a reading whose tools ended in the
+        error state measured nothing, and a later one supersedes it without the
+        earlier row being touched.
+        """
+        with self._conn() as conn:
+            row = conn.execute(
+                """SELECT * FROM verification_baselines
+                   WHERE repo=? AND base_sha=? ORDER BY id DESC LIMIT 1""",
+                (repo, base_sha),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def verification_baselines(self, repo: str, limit: int = 20) -> list[dict]:
+        """A repo's baseline readings, most recent first."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM verification_baselines WHERE repo=? ORDER BY id DESC LIMIT ?",
                 (repo, limit),
             ).fetchall()
             return [dict(r) for r in rows]

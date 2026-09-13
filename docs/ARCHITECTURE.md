@@ -145,6 +145,44 @@ What it buys beyond the loop we already have: **checkpointing**. A run that dies
 minute thirty resumes instead of restarting, and the checkpoint series is a record
 of every state transition — which is most of what `docs/VISION.md` P1 asks for.
 
+## The verification gate is differential
+
+The four tools run over the whole repository — a finding must never be hidden
+because it is old — but the report fails on what the change **introduced**,
+measured against the base commit's own report. An absolute gate asks "is this
+repository clean?", and on a repository with standing debt the answer is no for
+every change anyone could write, so no pull request is ever opened (issue #104).
+Both real targets were onboarded and blocked on exactly that.
+
+```
+branch report ──┐
+                ├──► introduced  → fails the gate, and is all the developer is shown
+base report ────┘    inherited   → reported, counted, tabled in the PR, never blocking
+  (cached per        fixed       → recorded, never required
+   repo + base SHA)
+```
+
+Three properties are load-bearing, and each is a `docs/VISION.md` claim rather
+than a convenience:
+
+- **the baseline is evidence, not a cache.** One row per `(repo, base SHA)` in
+  the knowledge base, append-only like `control_snapshots`: it says which commit
+  a verdict was measured against, when, with which environment, and exactly what
+  was already wrong. "This change introduced no new findings" is a claim, and the
+  row is what backs it;
+- **nothing is dropped.** Inherited findings are named in the summary, counted
+  per tool, and tabled in the pull request body. They are simply not this
+  change's to fix, and the developer's copy of the summary leaves them out so its
+  iteration budget is not spent on them;
+- **the rule is always named.** Every report says whether it was judged
+  differentially or absolutely, and why. A verdict whose rule is invisible is not
+  evidence. When no baseline can be had — the setting turned off, a base commit
+  that cannot be found, a tool that errored on the base — the absolute rule
+  applies to whatever is affected, per tool, with the reason printed.
+
+A tool in the error state still fails the report. "The tool could not run" is not
+a finding that can be inherited.
+
 ## The human reviews at the end
 
 Once the code is functional and the gates agree, and not before. The pull request

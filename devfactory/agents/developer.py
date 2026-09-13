@@ -79,12 +79,17 @@ class DeveloperAgent(BaseAgent):
         parts.append(f"\n## Test Strategy\n{spec.test_strategy}")
         parts.append(f"\n## Technical Notes\n{spec.tech_notes}")
 
-        # On retry: include verification feedback so OpenCode fixes the reported issues.
+        # On retry: include verification feedback so OpenCode fixes the reported
+        # issues. `developer_feedback`, not `summary`: under the differential rule
+        # the summary also carries the repository's inherited findings, which are
+        # evidence for the pull request and a trap here. A developer handed 67
+        # pre-existing ruff findings in files the issue never mentioned spends its
+        # whole iteration budget on them (issue #104).
         if ctx.verification_attempts > 0 and ctx.verification_report:
             parts.append(
                 f"\n## Verification Feedback (attempt {ctx.verification_attempts})\n"
                 f"The previous implementation failed verification. Fix the following issues:\n\n"
-                f"{ctx.verification_report.summary}"
+                f"{ctx.verification_report.developer_feedback}"
             )
 
         # On a scope rejection: the change did not reach the files the task named.

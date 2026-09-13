@@ -23,12 +23,14 @@ workspace and the gate only reads it.
 from __future__ import annotations
 
 import logging
+import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from devfactory.context import VerificationReport
 from devfactory.github import git_ops
+from devfactory.verification import baseline
 from devfactory.verification.environment import TargetEnvironment, resolve_environment
 from devfactory.verification.profiles import TOOLS, VerificationProfile, load_profile
 from devfactory.verification.runner import ERROR, FINDINGS, SKIPPED, VerificationRunner
@@ -117,6 +119,19 @@ def dry_run(repo: str, path: Path | None = None) -> GateDryRun:
     started = time.monotonic()
     report = VerificationRunner().run(checkout, repo=repo)
     duration = time.monotonic() - started
+
+    # This is the gate on a default branch, which is precisely what every later
+    # differential verdict measures against (issue #104). Recording it here costs
+    # nothing — the run already happened — and makes the first pipeline run on the
+    # repository free of the extra gate it would otherwise pay for. A checkout with
+    # no SHA (a plain export) is nobody's base, so nothing is written for it.
+    if commit != "unknown":
+        try:
+            baseline.record(report, repo, commit)
+        except sqlite3.Error as exc:
+            # The dry run's answer is about the repository; failing to file the
+            # reading must not change it. The reading is recomputed on demand.
+            logger.warning(f"[onboarding] could not record the baseline for {repo}: {exc}")
 
     return GateDryRun(
         repo=repo,

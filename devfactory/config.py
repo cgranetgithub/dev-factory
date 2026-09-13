@@ -29,6 +29,8 @@ class Settings(BaseSettings):
         DEVFACTORY_DB_PATH         Path to the SQLite knowledge-base file.
         DEVFACTORY_WORKSPACE       Directory where repositories are cloned.
         DEVFACTORY_MAX_VERIFICATION_RETRIES  Max developer→verification loop iterations per issue.
+        DEVFACTORY_DIFFERENTIAL_GATE  Fail verification on what the change introduced,
+                            measured against the base branch (default: true).
         DEVFACTORY_LOG_LEVEL       Logging verbosity (DEBUG / INFO / WARNING).
 
     OpenCode — the harness every agent runs through:
@@ -71,6 +73,13 @@ class Settings(BaseSettings):
     db_path: Path = Field(default=Path("./devfactory.db"), alias="DEVFACTORY_DB_PATH")
     workspace: Path = Field(default=Path("/tmp/devfactory"), alias="DEVFACTORY_WORKSPACE")
     max_verification_retries: int = Field(default=3, alias="DEVFACTORY_MAX_VERIFICATION_RETRIES")
+    # Judge a change on what it introduced rather than on whether the repository is
+    # clean (issue #104). On by default: an absolute gate makes any repository with
+    # standing debt un-onboardable, which blocked both real targets. Turning it off
+    # restores the absolute rule for every run — the strict reading, and the one to
+    # fall back to if a differential verdict is ever in doubt. Either way the
+    # summary names the rule it applied.
+    differential_gate: bool = Field(default=True, alias="DEVFACTORY_DIFFERENTIAL_GATE")
     log_level: str = Field(default="INFO", alias="DEVFACTORY_LOG_LEVEL")
 
     # OpenCode CLI — the harness. The binary lives in

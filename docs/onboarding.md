@@ -196,29 +196,85 @@ string concatenation that predates the factory. Two are worth singling out:
   findings is mostly that. The fix is a `ruff.toml` in news-watch, chosen by its
   owner; `ruff_args` in the profile is the fallback, and it is a fallback.
 
-**Neither repository can be processed by the factory until its `main` passes.**
-The developer agent would spend its whole retry budget on findings that have
-nothing to do with the issue it was given, and the run would end with no pull
-request. That is a real limitation of an absolute gate, recorded below and tracked in
-[#104](https://github.com/cgranetgithub/dev-factory/issues/104).
+Neither repository passed its own gate, and while the gate was absolute that meant
+neither could be processed at all: the developer agent would have spent its whole
+retry budget on findings that have nothing to do with the issue it was given.
+**That is fixed** — the pipeline now judges a change differentially (#104), and the
+measurement is in the next section. `devfactory gate check` still reports
+absolutely, because "is this repository clean?" is the right question to ask about
+a repository, and its answer is the baseline every later verdict rests on.
+
+---
+
+## What the differential gate changes (issue #104)
+
+The pipeline's gate fails on what a change **introduced**, measured against the
+base commit's own report. The four tools still run over the whole repository —
+nothing is hidden for being old — but a finding that was already there is
+*inherited*: reported, counted, tabled in the pull request, and not blocking.
+
+Measured on 2026-09-13, on clones of both targets, image already built:
+
+| | biz-explore @ `d7828f57` | news-watch @ `698e3f2f` |
+|---|---|---|
+| Gate on untouched `main`, **absolute** | ✗ fail — mypy 27, bandit 361/MEDIUM | ✗ fail — ruff 70, mypy 12, bandit 283/MEDIUM |
+| Gate on untouched `main`, **differential** | **✓ pass** — 388 inherited, 0 introduced | **✓ pass** — 365 inherited, 0 introduced |
+| Branch introducing one finding per tool | ✗ fail — names 1 ruff, 1 mypy, 1 pytest, and nothing else | ✗ fail — names 2 ruff, 1 mypy, 1 pytest, and nothing else |
+| Branch fixing one inherited finding | ✓ pass — 1 mypy fixed, 0 introduced | ✓ pass — 1 ruff fixed, 0 introduced |
+| Wall clock, gate on the branch | 69–80 s | 25–36 s |
+| Wall clock, baseline (once per base SHA) | 116 s | 28 s |
+
+The introduced-finding branches added one module with an unused import and a wrong
+return type, plus one failing test. What came back named exactly those, with the
+365 (or 388) inherited findings listed separately as inherited and **absent from
+the developer's copy of the summary** — which is the whole point.
+
+Three things worth knowing:
+
+- **the baseline is measured once per `(repo, base SHA)`** and stored in the
+  knowledge base, so only the first run on a base commit pays for it. It is also
+  an audit record: it says what was already wrong at that commit, when it was
+  measured, and with which environment. The rows are append-only — a new
+  measurement is a new row, never an edit;
+- **`devfactory gate check` seeds it.** A dry run on the default branch is
+  exactly the reading a baseline holds, so it is recorded, and the first pipeline
+  run on that commit is free of the extra gate run;
+- **the rule is always printed.** Every report says `Pass rule: differential`
+  (with the commit it was measured against) or `Pass rule: absolute` (with the
+  reason there is no baseline). Set `DEVFACTORY_DIFFERENTIAL_GATE=false` to go
+  back to the absolute rule everywhere.
+
+A tool that ends in the **error** state still fails the report. "The tool could
+not run" is not a finding that can be inherited.
 
 ---
 
 ## Known limits
 
-- **The gate is absolute, not differential.** It asks "is this repository clean?",
-  not "did this change make it worse". Any repository with pre-existing findings
-  is unusable until they are fixed or a tool is switched off for it. This is the
-  single biggest obstacle to onboarding an existing codebase, and it is why both
-  current targets are onboarded but blocked; tracked in
-  [#104](https://github.com/cgranetgithub/dev-factory/issues/104).
+- **The differential gate is per finding key, not per line.** Two findings match
+  when their `(file, rule code, message)` — or `(file, test id, severity)` for
+  bandit, or the node id for pytest — are equal, counted as a multiset. A change
+  that deletes one occurrence of a key and adds another elsewhere in the same file
+  nets to zero and is not reported. Line numbers are deliberately not part of the
+  key: they move whenever anything above them changes.
+- **A flaky test reads as an introduced failure.** Its node id was not in the
+  base's failing set, so a test that fails only sometimes fails the gate on the
+  branch. That is not new — an absolute gate failed on it too — but the
+  differential rule does not fix it either, and a target with a flaky suite will
+  see it. `pytest_args` in the profile is the current lever.
+- **A tool that errored on the base is judged absolutely.** The base measured
+  nothing for it, so "was it already there?" has no answer, and the strict reading
+  is the only honest one. The report names the tool and the reason.
 - **ruff's defaults stand in for a missing configuration.** A target with no ruff
   configuration is judged by whatever the image's ruff version defaults to, which
   changes when the image is rebuilt. Targets should carry their own config.
 - **No shared uv cache.** Each container fetches its wheels again; the
-  interpreters are baked into the image, the packages are not. That costs a few
-  seconds per run today — the whole gate is 14–19 s on these repositories,
-  DevFactory included — and would cost more on a heavier dependency tree.
+  interpreters are baked into the image, the packages are not. Re-measured on
+  2026-09-13 it is no longer a few seconds: the whole gate is 25–36 s on
+  news-watch and 69–116 s on biz-explore, whose `requirements.txt` pulls numpy and
+  langchain cold every time. Tracked in
+  [#109](https://github.com/cgranetgithub/dev-factory/issues/109); the
+  differential gate pays it once more per base SHA, and then not again.
 - **A Python version the image does not cache is downloaded per run.** Cached:
   3.11, 3.12, 3.13, 3.14.
 - **The install needs the network**, like `pip install` did before it. Nothing

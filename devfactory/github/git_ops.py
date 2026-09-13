@@ -92,6 +92,76 @@ def _redact(message: str) -> str:
     return re.sub(r"https://[^@\s/]+@", "https://<token>@", message)
 
 
+# Where a checkout of a base commit goes, so the gate can measure what the branch
+# inherited. Beside the pipeline's workspaces and the onboarding clones, never
+# inside one: measuring the base must not be able to disturb the run measuring
+# against it.
+BASELINE_DIR = "baselines"
+
+
+def base_sha(ctx: PipelineContext) -> str | None:
+    """The commit the feature branch left the default branch at.
+
+    The merge base, not the default branch's current tip: the differential verdict
+    asks what *this branch* introduced, and findings someone else pushed to the
+    default branch while the run was in flight are not the branch's to answer for.
+
+    Returns:
+        The full SHA, or None when it cannot be determined — the caller then falls
+        back to the absolute rule rather than guessing.
+    """
+    repo = git.Repo(workspace_path(ctx))
+    try:
+        merge_base: str = repo.git.merge_base(default_branch(repo), "HEAD")
+    except git.GitCommandError as exc:
+        logger.warning(f"[git] could not find the base commit of {ctx.branch_name}: {exc}")
+        return None
+    return merge_base.strip() or None
+
+
+def baseline_checkout(source: Path, sha: str, name: str) -> Path:
+    """A clean checkout of ``sha``, cloned from a local checkout that already has it.
+
+    Cloned rather than branched in place: the pipeline's workspace holds the
+    change being verified, and checking another commit out of it would destroy the
+    very thing the gate is measuring. A local clone costs almost nothing — git
+    hard-links the objects — and needs no network, which matters because the
+    baseline is taken in the middle of a run.
+
+    A real clone rather than an export, because the gate installs the target and a
+    repository may read its own history to do so.
+
+    Args:
+        source: A checkout that contains ``sha`` — the run's own workspace.
+        sha: The commit to check out.
+        name: Directory name under the baselines directory, normally the repo name.
+
+    Returns:
+        The checkout path.
+
+    Raises:
+        git.GitError: The clone or the checkout failed. The caller treats that as
+            "no baseline" and falls back to the absolute rule.
+    """
+    dest = settings.workspace / BASELINE_DIR / name
+    if (dest / ".git").exists():
+        repo = git.Repo(dest)
+        repo.remotes.origin.set_url(str(source))
+        repo.remotes.origin.fetch()
+    else:
+        logger.info(f"[git] cloning {source} → {dest} to measure the base commit")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        repo = git.Repo.clone_from(str(source), dest)
+
+    # -x as well as -fd: the previous baseline may have left ignored files behind,
+    # and the gate must judge the commit, not what a run before it dropped there.
+    repo.git.reset("--hard")
+    repo.git.clean("-fdx")
+    repo.git.checkout(sha, force=True)
+    logger.info(f"[git] baseline checkout at {dest} is on {sha[:8]}")
+    return dest
+
+
 def head_of(path: Path) -> tuple[str, str]:
     """The commit and the branch a checkout is on, for the record.
 
