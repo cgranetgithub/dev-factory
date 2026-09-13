@@ -370,6 +370,7 @@ def _run_init(repo: str) -> int:
     import subprocess
 
     from devfactory.github.issues import _ensure_labels
+    from devfactory.verification.runner import uv_cache_volume
 
     console.rule("[bold blue]DevFactory Init[/]")
 
@@ -393,8 +394,31 @@ def _run_init(repo: str) -> int:
     else:
         console.print(f"   [red]✗ Docker build failed:[/]\n{result.stderr[-500:]}")
 
-    # 3. Ollama check + provisioning
-    console.print("\n[bold]3. Checking Ollama...[/]")
+    # 3. The uv cache volume. Docker would create it on first use anyway, so this
+    # step is not what makes the gate work — it is what makes a fresh install
+    # explicit: the volume exists, is named, and can be inspected before anything
+    # has run, and step 6 below then warms it by gating the default branch. An
+    # operator who never sees it created is an operator who will not think to wipe
+    # it (issue #109; docs/onboarding.md says how).
+    console.print("\n[bold]3. Creating the uv cache volume...[/]")
+    volume = uv_cache_volume(repo)
+    if volume is None:
+        console.print(
+            "   [yellow]⚠ DEVFACTORY_UV_CACHE_SCOPE=off — every gate run fetches "
+            "its wheels again[/]"
+        )
+    else:
+        created = subprocess.run(
+            ["docker", "volume", "create", volume], capture_output=True, text=True
+        )
+        if created.returncode == 0:
+            console.print(f"   [green]✓ Cache volume ready: {volume}[/]")
+        else:
+            # Not fatal: the gate still runs, it just pays the cold cost.
+            console.print(f"   [yellow]⚠ Could not create {volume}:[/] {created.stderr.strip()}")
+
+    # 4. Ollama check + provisioning
+    console.print("\n[bold]4. Checking Ollama...[/]")
     try:
         from devfactory.models.client import ollama
         from devfactory.models.provisioning import check_ollama_version, ensure_models_available
@@ -415,18 +439,19 @@ def _run_init(repo: str) -> int:
     except Exception as e:
         console.print(f"   [red]✗ Ollama not reachable: {e}[/]")
 
-    # 4. DB init
-    console.print("\n[bold]4. Initialising database...[/]")
+    # 5. DB init
+    console.print("\n[bold]5. Initialising database...[/]")
     from devfactory.kb.database import db
 
     db._ensure_db()
     console.print(f"   [green]✓ DB ready at {db.path}[/]")
 
-    # 5. The gate, on the repository as it stands. Last because it needs the image
-    # built above, and because it is the step that decides whether the other four
-    # were worth doing: a repository whose default branch fails its own gate
-    # cannot be processed at all (issue #92).
-    console.print("\n[bold]5. Dry run of the verification gate on the default branch...[/]")
+    # 6. The gate, on the repository as it stands. Last because it needs the image
+    # and the cache volume built above, and because it is the step that decides
+    # whether the other five were worth doing: a repository whose default branch
+    # fails its own gate cannot be processed at all (issue #92). It also leaves the
+    # cache warm, so the first real pipeline run is not the one that pays for it.
+    console.print("\n[bold]6. Dry run of the verification gate on the default branch...[/]")
     code = _gate_dry_run(repo)
     if code != 0:
         console.print("\n[bold yellow]Init incomplete[/] — see docs/onboarding.md.")

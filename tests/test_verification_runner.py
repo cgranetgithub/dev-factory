@@ -21,13 +21,17 @@ import json
 
 import pytest
 
+from devfactory.config import settings
 from devfactory.verification import profiles
 from devfactory.verification.runner import (
     CLEAN,
+    CONTAINER_WORKDIR,
     ERROR,
     FINDINGS,
     SKIPPED,
+    UV_CACHE_DIR,
     VerificationRunner,
+    uv_cache_volume,
 )
 
 _RUFF_CLEAN = ("[]", 0)
@@ -69,7 +73,7 @@ def _runner(
         **scripted,
     }
 
-    def fake_docker_run(self, repo_path, cmd, timeout=120):
+    def fake_docker_run(self, repo_path, cmd, timeout=120, cache_volume=None):
         if recorded is not None:
             recorded.append(cmd)
         # Ruff and bandit each get their own container; the shared mypy+pytest
@@ -550,3 +554,116 @@ def test_the_summary_records_the_environment_the_verdict_was_produced_in(monkeyp
 
     assert "python 3.13 (from requires-python >=3.13)" in report.summary
     assert '"python_source": "requires-python >=3.13"' in report.raw_output
+
+
+# ── The uv cache volume (issue #109) ─────────────────────────────────────────
+#
+# These assert the `docker run` argv itself, so they stub one level lower than
+# the rest of the file: the tests above replace `_docker_run` wholesale, and it is
+# that method's command line which is under test here.
+
+
+def _docker_argvs(monkeypatch, repo_path, repo=None) -> list[list[str]]:
+    """Every `docker run` argv a full verification produces, in order."""
+    import subprocess
+
+    calls: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(list(argv))
+        shell_cmd = argv[-1]
+        if "ruff" in shell_cmd:
+            out = "[]"
+        elif "bandit" in shell_cmd:
+            out = json.dumps({"results": []})
+        else:
+            out, _ = _combined(_MYPY_CLEAN, _PYTEST_CLEAN)
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    VerificationRunner(image="test-image").run(repo_path, repo=repo)
+    return calls
+
+
+def _volumes(argv: list[str]) -> list[str]:
+    """The value of every --volume flag in a docker argv."""
+    return [argv[i + 1] for i, arg in enumerate(argv) if arg == "--volume"]
+
+
+def test_the_installing_container_mounts_the_cache_volume_read_write(monkeypatch, tmp_path):
+    """A cache nothing may write to never fills, so the mount carries no `:ro`."""
+    shared = [a for a in _docker_argvs(monkeypatch, tmp_path, repo="owner/repo") if "mypy" in a[-1]]
+
+    assert len(shared) == 1
+    cache = [v for v in _volumes(shared[0]) if v.startswith("devfactory-uv-cache")]
+    assert cache == [f"{uv_cache_volume('owner/repo')}:{UV_CACHE_DIR}"]
+
+
+def test_the_candidate_checkout_stays_read_only_in_every_container(monkeypatch, tmp_path):
+    """The checkout the pipeline commits must come out of every container
+    byte-identical — the install writes into /build, never into the mount."""
+    for argv in _docker_argvs(monkeypatch, tmp_path, repo="owner/repo"):
+        assert f"{tmp_path.absolute()}:{CONTAINER_WORKDIR}:ro" in _volumes(argv)
+
+
+def test_only_the_installing_container_is_given_the_cache(monkeypatch, tmp_path):
+    """Ruff and bandit read source text and run no uv: handing them the cache
+    would widen what model-generated code can reach for no gain at all."""
+    for argv in _docker_argvs(monkeypatch, tmp_path, repo="owner/repo"):
+        if "mypy" not in argv[-1]:
+            assert not any(v.startswith("devfactory-uv-cache") for v in _volumes(argv))
+
+
+def test_the_build_directory_is_still_a_container_path_not_a_mount(monkeypatch, tmp_path):
+    """#77 and #105 copy the checkout into /build inside the container. The cache
+    volume must not have turned that into a mount of its own."""
+    shared = [a for a in _docker_argvs(monkeypatch, tmp_path, repo="owner/repo") if "mypy" in a[-1]]
+
+    assert not any(v.split(":")[1] == "/build" for v in _volumes(shared[0]) if ":" in v)
+    assert "mkdir -p /build" in shared[0][-1]
+
+
+def test_no_volume_is_mounted_when_the_cache_is_off(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "uv_cache_scope", "off")
+
+    for argv in _docker_argvs(monkeypatch, tmp_path, repo="owner/repo"):
+        assert _volumes(argv) == [f"{tmp_path.absolute()}:{CONTAINER_WORKDIR}:ro"]
+
+
+def test_each_repository_gets_its_own_volume_by_default(monkeypatch):
+    monkeypatch.setattr(settings, "uv_cache_scope", "repository")
+
+    assert uv_cache_volume("cgranetgithub/dev-factory").startswith(
+        "devfactory-uv-cache-cgranetgithub-dev-factory-"
+    )
+    assert uv_cache_volume("a/b") != uv_cache_volume("a/c")
+
+
+def test_the_shared_scope_gives_every_repository_the_same_volume(monkeypatch):
+    monkeypatch.setattr(settings, "uv_cache_scope", "shared")
+
+    assert uv_cache_volume("a/b") == uv_cache_volume("c/d") == "devfactory-uv-cache-shared"
+
+
+def test_two_slugs_that_flatten_alike_do_not_share_a_volume(monkeypatch):
+    """`a/b-c` and `a-b/c` both sanitise to `a-b-c`; the digest is what keeps the
+    per-repository scope actually per-repository."""
+    monkeypatch.setattr(settings, "uv_cache_scope", "repository")
+
+    assert uv_cache_volume("a/b-c") != uv_cache_volume("a-b/c")
+
+
+def test_a_run_with_no_slug_gets_the_unscoped_volume(monkeypatch):
+    monkeypatch.setattr(settings, "uv_cache_scope", "repository")
+
+    assert uv_cache_volume(None) == "devfactory-uv-cache-unscoped"
+
+
+def test_an_unknown_scope_falls_back_to_the_most_isolated_one(monkeypatch):
+    """A typo in .env must not stop the factory verifying, and must not silently
+    widen the cache either."""
+    monkeypatch.setattr(settings, "uv_cache_scope", "repository")
+    expected = uv_cache_volume("a/b")
+    monkeypatch.setattr(settings, "uv_cache_scope", "nonsense")
+
+    assert uv_cache_volume("a/b") == expected
