@@ -249,38 +249,36 @@ def test_parse_review_empty_json():
     assert result.summary == ""
 
 
-def test_parse_review_valid_json_with_extra_text():
-    """Test that reviewer correctly handles JSON when there's extra text around it."""
+def test_a_verdict_wrapped_in_prose_is_still_the_verdict():
+    """A refusal must not be lost because the model introduced itself first.
 
-    # Test the logic directly without model instantiation
-
-    # Valid JSON with extra text - but this should fail because it's missing code block
-    # The current regex pattern expects fenced code blocks
+    This test asserted the opposite until 2026-09-10, when the measurement for
+    #101 showed what the old behaviour costs: `glm-4.7-flash:latest` answered a
+    change that violated an acceptance criterion with one sentence of preamble
+    and then the JSON object. There was no fenced block, the whole string was not
+    JSON, and the parser recorded `commented` — a real `changes_requested` turned
+    into a non-refusal, by the gate whose refusals were being counted.
+    """
     json_with_text = """
-Some introductory text that should be ignored.
+I'll review this change systematically, examining reachability and correctness.
 {
-    "verdict": "approved",
-    "summary": "Good code quality",
-    "score": 0.9,
+    "verdict": "changes_requested",
+    "summary": "The implementation drops accented characters.",
+    "score": 0.2,
     "inline_comments": []
 }
 Some trailing text that should be ignored.
 """
 
-    # Import the module and test the function directly
-    from devfactory.agents.reviewer import ReviewerAgent
-
     agent = ReviewerAgent(model=mock.MagicMock())
-    # Override the model property to avoid the error
     agent._model = mock.MagicMock()
     agent._model.name = "test-model"
 
     result = agent._parse_review(json_with_text)
 
-    # Since there are no code blocks, it should fail to parse and return commented verdict
-    assert result.model == "test-model"
-    assert result.verdict == "commented"
-    assert result.score == 0.5
+    assert result.verdict == "changes_requested"
+    assert result.summary == "The implementation drops accented characters."
+    assert result.score == 0.2
 
 
 def test_parse_review_no_json_in_block():

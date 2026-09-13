@@ -152,6 +152,10 @@ python -m pytest tests/ --cov=devfactory --cov-report=term-missing
 - Use `Scorer(database=make_db())` pattern for DB isolation.
 - Place integration tests (that call real APIs) in `tests/integration/` with
   a `@pytest.mark.integration` mark, and document the required setup.
+  The default suite deselects that mark, so opt in explicitly:
+  ```bash
+  python -m pytest tests/integration -m integration -v -s
+  ```
 
 ---
 

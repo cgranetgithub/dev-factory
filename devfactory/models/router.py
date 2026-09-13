@@ -60,6 +60,10 @@ class ModelRouter:
         to be a caller's choice, and the one caller that needed it lost the flag in
         a refactor: the developer could then draw a prose-only model.
 
+        The reviewer role carries a second filter, ``refuses_a_violated_criterion``,
+        for the same reason at the next level up: a model that drives the loop but
+        approves everything staffs a gate that cannot fail.
+
         Args:
             role: Agent role ("analyst", "developer", "reviewer")
             exclude: Model names to exclude (e.g. the developer's, for the reviewer)
@@ -77,6 +81,15 @@ class ModelRouter:
 
         candidates = [m for m in candidates if m.drives_agentic_loop]
 
+        # The reviewer additionally has to be able to refuse. Measured for #101:
+        # every model refused a defect one file outside the diff, but one of the
+        # four approved a change that violated a stated acceptance criterion,
+        # praising the very line that broke it. A gate staffed by that model is a
+        # gate that cannot fail, so it is filtered out of this role — and only
+        # this role, since the same model is a capable developer.
+        if role == "reviewer":
+            candidates = [m for m in candidates if m.refuses_a_violated_criterion]
+
         if exclude:
             candidates = [m for m in candidates if m.name not in exclude]
 
@@ -87,7 +100,8 @@ class ModelRouter:
 
         if not candidates:
             raise RuntimeError(
-                f"No available models for role '{role}' that drive the agentic loop "
+                f"No available models for role '{role}' that drive the agentic loop"
+                f"{' and can refuse a violated criterion' if role == 'reviewer' else ''} "
                 f"(excluded: {exclude}; check Ollama and the registry)"
             )
 

@@ -126,3 +126,53 @@ def test_a_reviewer_can_always_differ_from_the_developer():
     rev_drivers = {m.name for m in get_models_for_role("reviewer") if m.drives_agentic_loop}
 
     assert rev_drivers - dev_drivers or len(dev_drivers) >= 2
+
+
+def _reviewers_that_refuse() -> set[str]:
+    return {
+        m.name
+        for m in get_models_for_role("reviewer")
+        if m.drives_agentic_loop and m.refuses_a_violated_criterion
+    }
+
+
+def test_the_router_only_gives_the_reviewer_a_model_that_can_refuse():
+    """A gate staffed by a model that approves everything is not a gate.
+
+    Measured for #101: one of the four agentic drivers approved a change that
+    violated a stated acceptance criterion, praising the line that broke it. The
+    same model is a perfectly good developer, so the filter is on the role rather
+    than on the model.
+    """
+    router = ModelRouter(verify_availability=False)
+
+    selected = {router.select("reviewer").name for _ in range(30)}
+
+    assert selected <= _reviewers_that_refuse()
+
+
+def test_only_the_reviewer_role_is_filtered_on_refusal():
+    """The developer keeps its full pool — the flag says nothing about coding."""
+    router = ModelRouter(verify_availability=False)
+    cannot_refuse = {
+        m.name
+        for m in get_models_for_role("developer")
+        if m.drives_agentic_loop and not m.refuses_a_violated_criterion
+    }
+    if not cannot_refuse:
+        pytest.skip("every agentic developer also refuses; nothing to distinguish")
+
+    selected = {router.select("developer").name for _ in range(60)}
+
+    assert selected & cannot_refuse
+
+
+def test_the_reviewer_pool_survives_losing_the_developers_model():
+    """The reviewer avoids the developer's model, and both filters apply at once.
+
+    With only one refusing reviewer left, a run whose developer drew that model
+    would have no reviewer at all — so the pool needs at least two.
+    """
+    assert len(_reviewers_that_refuse()) >= 2, (
+        f"single point of failure for the review gate: {sorted(_reviewers_that_refuse())}"
+    )
