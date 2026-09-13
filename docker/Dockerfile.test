@@ -53,8 +53,20 @@ RUN uv python install 3.11 3.12 3.13 3.14
 
 # Copying rather than hardlinking: the prepare step installs into /build, which is
 # a different filesystem layer from the cache, and uv warns on every package
-# otherwise — noise in an output the developer agent has to read.
+# otherwise — noise in an output the developer agent has to read. With the cache
+# now on a Docker volume it is also required rather than merely quieter: a
+# hardlink cannot cross from the volume to the container's own filesystem.
 ENV UV_LINK_MODE=copy
+
+# Where uv keeps what it downloads. The gate mounts a named Docker volume here —
+# see UV_CACHE_DIR in devfactory/verification/runner.py, which must stay in sync —
+# so the dependency tree is resolved and fetched once instead of once per
+# container (issue #109: 139-161s per gate run on this repository without it,
+# 16s with it). Declared *after* `uv python install` above so the directory is
+# empty in the image: a named volume is seeded from the image's copy of its mount
+# point on first use, and a build-time cache leaking into it would make an
+# operator's "wipe the cache" not quite wipe the cache.
+ENV UV_CACHE_DIR=/cache/uv
 
 WORKDIR /workspace
 

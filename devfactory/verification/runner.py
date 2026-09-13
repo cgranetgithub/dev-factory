@@ -29,6 +29,7 @@ Python and which install command (issue #92). A per-repository profile
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -53,6 +54,19 @@ CONTAINER_WORKDIR = "/workspace"
 # A fixed path, not `mktemp -d`: mypy and pytest report their findings under it,
 # and _build_summary can only strip a prefix it knows in advance.
 BUILD_DIR = "/build"
+
+# Where the persistent uv download cache is mounted. Kept in sync with the
+# `ENV UV_CACHE_DIR` line of docker/Dockerfile.test: the image declares where its
+# cache lives, and this is the path the runner mounts a volume onto. Outside
+# /workspace and /build on purpose — the cache must not appear in the tree the
+# tools report on, or mypy would type-check somebody else's wheels.
+UV_CACHE_DIR = "/cache/uv"
+
+# Every cache volume this project creates starts with this, so one command lists
+# them all and one command wipes them all:
+#   docker volume ls     --filter name=devfactory-uv-cache
+#   docker volume rm $(docker volume ls -q --filter name=devfactory-uv-cache)
+UV_CACHE_VOLUME_PREFIX = "devfactory-uv-cache"
 
 # The interpreter of the environment built for the target, and the pytest that
 # environment provides. Both are named absolutely rather than found on PATH: the
@@ -89,6 +103,50 @@ ABSOLUTE_RULE_LINE = (
 # prints, so a finding quoting a marker cannot forge a section boundary.
 _MARKER = "##DEVFACTORY:{}##"
 _EXIT_MARKER = "##DEVFACTORY:{}_EXIT:"
+
+
+def uv_cache_volume(repo: str | None) -> str | None:
+    """Name the Docker volume holding the uv download cache for ``repo``.
+
+    Returns ``None`` when ``DEVFACTORY_UV_CACHE_SCOPE`` is ``off``, which is the
+    pre-#109 behaviour: no volume, every container fetches every wheel again.
+
+    The name is readable *and* unambiguous, which takes both halves: the slug with
+    every character Docker does not accept in a volume name replaced by a dash, so
+    a human reading `docker volume ls` recognises it, plus eight hex characters of
+    the slug's SHA-256, because that replacement is lossy — ``a/b-c`` and ``a-b/c``
+    flatten to the same string, and two repositories silently sharing a volume
+    would undo the isolation the "repository" scope is chosen for.
+
+    A run with no slug (``devfactory gate check --path`` on a bare checkout, or a
+    direct :meth:`VerificationRunner.run`) cannot be scoped to a repository, so it
+    gets one volume of its own that every unscoped run shares. That is the shared
+    scope's exposure for those runs, and it is the honest answer: we do not know
+    whose checkout this is.
+
+    Args:
+        repo: The target's ``owner/repo`` slug, or ``None``.
+
+    Returns:
+        The volume name, or ``None`` if caching is disabled.
+    """
+    scope = settings.uv_cache_scope.strip().lower()
+    if scope == "off":
+        return None
+    if scope == "shared":
+        return f"{UV_CACHE_VOLUME_PREFIX}-shared"
+    if scope != "repository":
+        # Not a hard failure: a typo in .env must not stop the factory verifying.
+        # It falls back to the most isolated scope, and says so once per run.
+        logger.warning(
+            f"[verification] DEVFACTORY_UV_CACHE_SCOPE={settings.uv_cache_scope!r} is not "
+            f"one of repository/shared/off — using 'repository'"
+        )
+    if repo is None:
+        return f"{UV_CACHE_VOLUME_PREFIX}-unscoped"
+    readable = re.sub(r"[^A-Za-z0-9_.-]", "-", repo)
+    digest = hashlib.sha256(repo.encode()).hexdigest()[:8]
+    return f"{UV_CACHE_VOLUME_PREFIX}-{readable}-{digest}"
 
 
 class VerificationRunner:
@@ -177,7 +235,13 @@ class VerificationRunner:
             ),
         )
 
-    def _docker_run(self, repo_path: Path, cmd: str, timeout: int = 120) -> tuple[str, int]:
+    def _docker_run(
+        self,
+        repo_path: Path,
+        cmd: str,
+        timeout: int = 120,
+        cache_volume: str | None = None,
+    ) -> tuple[str, int]:
         """Run a command inside the test Docker container.
 
         The repo is mounted read-only; ``timeout`` bounds the whole container run
@@ -187,13 +251,65 @@ class VerificationRunner:
         :data:`_TIMED_OUT` rather than raised, because "the tests did not finish"
         is a verification result the developer should hear about, not a pipeline
         crash.
+
+        ``cache_volume`` names a Docker volume mounted read-write at
+        :data:`UV_CACHE_DIR`, and only the step that installs the target passes
+        one — ruff and bandit read source text, run no uv and gain nothing from a
+        cache, so they are not given access to it.
+
+        **Why a writable volume is acceptable here, and what it still costs.**
+        Model-generated code runs in this container — the target's own tests, and
+        whatever its build backend executes at install time — so a volume that
+        outlives the run is state one run can leave behind for the next. That is a
+        real widening of what the container can touch, and worth being exact about
+        rather than waving at "uv verifies hashes":
+
+        * What it is *not*. It is not a shared *installed environment*. The venv
+          is built fresh in ``/build`` inside every container and thrown away with
+          it; nothing on this volume is ever put on ``sys.path`` or executed
+          without uv unpacking it into that fresh venv first.
+        * What is genuinely verified. A target installed from a lockfile —
+          ``uv sync --frozen``, which is what a repository with a ``uv.lock`` gets
+          — carries per-artefact hashes, and uv checks the artefact against them.
+          A tampered wheel in the cache is caught there.
+        * What is not. ``uv pip install`` from a ``requirements.txt`` or a bare
+          ``pyproject.toml`` has no hashes to check against, so for those targets
+          the cache is trusted content. A run that wrote a malicious wheel into
+          the cache under the name of a package a *later* run installs would be
+          believed.
+
+        That residual risk is why the default scope is one volume **per
+        repository** (``DEVFACTORY_UV_CACHE_SCOPE=repository``). It keeps the
+        trust boundary exactly where it already was: a repository's tests can
+        influence later runs of that same repository, which has always been true
+        — they *are* that repository's code — and they cannot reach any other
+        target's wheels. ``shared`` removes that boundary in exchange for a faster
+        first run on a newly onboarded repository, and what that is worth was
+        measured rather than assumed: against a shared cache DevFactory had
+        already warmed, news-watch's first gate run went 44.4s → 40.2s and
+        biz-explore's 97.8s → 75.3s. Once each, on repositories that then run
+        warm forever. That is the whole prize, and it does not buy the boundary.
+        ``off`` restores the pre-#109 behaviour for a deployment that wants no
+        shared state at all.
+        Wiping a volume that is suspected of holding something it should not is
+        one command, and ``docs/onboarding.md`` carries it.
         """
         full_cmd = [
             "docker",
             "run",
             "--rm",
+            # ":ro" is load-bearing and not a formality: the install writes
+            # (a venv, an egg-info, a refreshed lockfile), which is why
+            # _run_over_installed_copy copies the tree to /build first. The
+            # candidate checkout the pipeline will commit must come out of every
+            # container byte-identical.
             "--volume",
             f"{repo_path.absolute()}:{CONTAINER_WORKDIR}:ro",
+        ]
+        if cache_volume is not None:
+            # Read-write, necessarily: a cache nothing may write to never fills.
+            full_cmd += ["--volume", f"{cache_volume}:{UV_CACHE_DIR}"]
+        full_cmd += [
             "--workdir",
             CONTAINER_WORKDIR,
             self.image,
@@ -286,14 +402,22 @@ class VerificationRunner:
                 _tool_skipped("pytest", repo, passed=0, failed=0, errors=[]),
             )
 
-        # Measured 2026-09-10, two runs each, images built, cold container (no uv
-        # cache survives a run). Whole gate, all four tools: 14.4s / 15.1s for
-        # news-watch (uv sync from a lockfile, 210 tests), 17.7s / 17.9s for
-        # biz-explore (numpy + langchain from requirements.txt, 188 tests), 17.4s /
-        # 19.2s for this repository — where the same gate took 22.2s / 22.3s with
-        # `pip install .` (issue #77). This step is most of that time, and uv is
-        # why installing a target's dependencies is seconds rather than minutes;
-        # the interpreters are baked into the image, only the wheels are fetched.
+        # Measured 2026-09-13, two runs per state, image built. Whole gate, all
+        # four tools, cold (the volume wiped immediately before) then warm:
+        #
+        #   this repository  COLD 161.1s / 138.8s   WARM 16.0s / 15.9s
+        #   news-watch       COLD  44.4s /  44.8s   WARM 12.9s / 12.6s
+        #   biz-explore      COLD  97.8s / 109.4s   WARM 18.2s / 18.7s
+        #
+        # The cold column is what every run cost before the cache volume below
+        # existed (issue #109), and it is where the 14-19s figures recorded here
+        # on 2026-09-10 came from: they were taken against a Docker layer cache
+        # that a `--rm` container cannot actually have, and the honest number was
+        # always the cold one. This step is nearly all of that time — the
+        # interpreters are baked into the image, the wheels were not, and
+        # resolving plus downloading a dependency tree from scratch is what the
+        # gate was paying up to DEVFACTORY_MAX_VERIFICATION_RETRIES times per
+        # issue.
         #
         # Setuptools builds in-tree, so an install can leave ./build holding a
         # second copy of the package. mypy refuses to check a tree with two modules
@@ -348,8 +472,14 @@ class VerificationRunner:
                 f'echo "{_EXIT_MARKER.format("PYTEST")}$?##"',
             ]
 
+        # The only container given the cache volume: this is the one that runs uv.
+        # Read _docker_run's docstring before widening that — it is where the
+        # isolation reasoning lives.
         output, code = self._docker_run(
-            repo_path, "; ".join(steps), timeout=settings.verification_timeout_s
+            repo_path,
+            "; ".join(steps),
+            timeout=settings.verification_timeout_s,
+            cache_volume=uv_cache_volume(repo),
         )
 
         if code == _SETUP_FAILED:

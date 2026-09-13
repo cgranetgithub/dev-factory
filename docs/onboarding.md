@@ -17,22 +17,56 @@ in DevFactory. Onboarding is therefore short, and its purpose is to find out
 devfactory init --repo owner/repo
 ```
 
-It does five things, in order:
+It does six things, in order:
 
 1. creates the DevFactory labels on the repository;
 2. builds the verification image (`docker/Dockerfile.test`);
-3. checks Ollama and pulls every model the registry declares;
-4. initialises the knowledge base;
-5. **runs the gate on the repository's default branch** and reports it tool by tool.
+3. creates the repository's uv cache volume (see below);
+4. checks Ollama and pulls every model the registry declares;
+5. initialises the knowledge base;
+6. **runs the gate on the repository's default branch** and reports it tool by tool.
 
-Step 5 decides the outcome: `init` exits non-zero when the gate does not pass,
+Step 6 decides the outcome: `init` exits non-zero when the gate does not pass,
 because a repository whose `main` already fails verification will fail it on every
-run, whatever the developer agent produces.
+run, whatever the developer agent produces. It also leaves the cache warm, so the
+first real pipeline run is not the one that pays to fill it.
 
 > **The image must be rebuilt after upgrading DevFactory.** Since issue #92 the
 > runner drives `uv` inside the image; an older image has no `uv` and every gate
 > run ends in the error state. `devfactory init` rebuilds it, or:
 > `docker build -f docker/Dockerfile.test -t devfactory-test:latest .`
+
+### The uv cache volume
+
+The gate mounts a named Docker volume at `/cache/uv` in the container that
+installs the target, so a dependency tree is resolved and downloaded once rather
+than once per container (issue #109 — without it the gate cost 139-161 s per run
+on DevFactory itself instead of 16 s).
+
+```bash
+docker volume ls   --filter name=devfactory-uv-cache      # what exists
+docker volume inspect devfactory-uv-cache-owner-repo-1a2b3c4d
+docker volume rm   devfactory-uv-cache-owner-repo-1a2b3c4d   # wipe one
+docker volume rm $(docker volume ls -q --filter name=devfactory-uv-cache)  # wipe all
+```
+
+Wiping is always safe: the next gate run refills what it needs and costs the cold
+time once. Wipe when a run is suspected of having written something into the
+cache it should not have — the cache is the one piece of state that survives a
+`--rm` container, and the scope setting bounds, but does not remove, what that
+means.
+
+`DEVFACTORY_UV_CACHE_SCOPE` chooses the boundary:
+
+| value | volume | what it means |
+|---|---|---|
+| `repository` *(default)* | one per target slug | a repository's runs share a cache with each other and with no other repository — the trust boundary that already existed, since those runs are that repository's own code |
+| `shared` | `devfactory-uv-cache-shared` | one cache for every target. Faster the first time a new repository is gated — measured 2026-09-13, a shared cache already warmed by DevFactory took news-watch's first run from 44.4 s to 40.2 s and biz-explore's from 97.8 s to 75.3 s, once each — and it also lets one target's test run reach wheels another target will install |
+| `off` | none | the pre-#109 behaviour, every container refetches everything |
+
+The reasoning behind the default, including what uv does and does not verify, is
+in the docstring of `VerificationRunner._docker_run` — read it before changing
+the scope.
 
 ## 2. Run the gate dry run on its own
 
@@ -268,13 +302,16 @@ not run" is not a finding that can be inherited.
 - **ruff's defaults stand in for a missing configuration.** A target with no ruff
   configuration is judged by whatever the image's ruff version defaults to, which
   changes when the image is rebuilt. Targets should carry their own config.
-- **No shared uv cache.** Each container fetches its wheels again; the
-  interpreters are baked into the image, the packages are not. Re-measured on
-  2026-09-13 it is no longer a few seconds: the whole gate is 25–36 s on
-  news-watch and 69–116 s on biz-explore, whose `requirements.txt` pulls numpy and
-  langchain cold every time. Tracked in
-  [#109](https://github.com/cgranetgithub/dev-factory/issues/109); the
-  differential gate pays it once more per base SHA, and then not again.
+- **The first gate run on a repository is the slow one.** Since
+  [#109](https://github.com/cgranetgithub/dev-factory/issues/109) the uv download
+  cache lives on a named Docker volume, so only a run against an empty volume
+  pays for the whole dependency tree. Measured 2026-09-13, two runs per state,
+  whole gate: DevFactory 161.1 s / 138.8 s cold and 16.0 s / 15.9 s warm,
+  news-watch 44.4 s / 44.8 s cold and 12.9 s / 12.6 s warm, biz-explore 97.8 s /
+  109.4 s cold and 18.2 s / 18.7 s warm. `devfactory init` warms the volume as part of
+  onboarding, so in practice a pipeline run pays the warm figure; wiping the
+  volume, or onboarding a repository whose dependencies nothing else has fetched,
+  pays the cold one once.
 - **A Python version the image does not cache is downloaded per run.** Cached:
   3.11, 3.12, 3.13, 3.14.
 - **The install needs the network**, like `pip install` did before it. Nothing

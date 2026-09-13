@@ -31,6 +31,8 @@ class Settings(BaseSettings):
         DEVFACTORY_MAX_VERIFICATION_RETRIES  Max developer→verification loop iterations per issue.
         DEVFACTORY_DIFFERENTIAL_GATE  Fail verification on what the change introduced,
                             measured against the base branch (default: true).
+        DEVFACTORY_UV_CACHE_SCOPE  Which uv download cache the verification container
+                            mounts: repository / shared / off (default: repository).
         DEVFACTORY_LOG_LEVEL       Logging verbosity (DEBUG / INFO / WARNING).
 
     OpenCode — the harness every agent runs through:
@@ -104,6 +106,20 @@ class Settings(BaseSettings):
     # and it is a setting because "the tests did not finish" must stay a reported
     # verdict rather than something a bigger target trips by surprise.
     verification_timeout_s: int = Field(default=600, alias="DEVFACTORY_VERIFICATION_TIMEOUT_S")
+    # Which uv download cache the verification container mounts as a named Docker
+    # volume (issue #109). Three values, and the default is the middle one:
+    #   "repository" — one volume per target slug. Runs of a repository share a
+    #       cache with each other and with nothing else, which is the boundary
+    #       that already existed: a repository's tests have always been able to
+    #       affect later runs of that same repository, because they are its code.
+    #   "shared"     — one volume for every target. Faster the first time a new
+    #       repository is gated, and it lets one target's test run reach the
+    #       wheels another target will install. See the note above
+    #       VerificationRunner._docker_run before choosing it.
+    #   "off"        — no volume, the pre-#109 behaviour. Every container fetches
+    #       every wheel again; ~7x slower, and the escape hatch if the shared
+    #       state is judged unacceptable in a given deployment.
+    uv_cache_scope: str = Field(default="repository", alias="DEVFACTORY_UV_CACHE_SCOPE")
 
 
 # Singleton — import this everywhere
