@@ -3,6 +3,10 @@
 > A local AI-powered software factory that turns GitHub Issues into Pull Requests —
 > entirely on your own hardware.
 
+[![CI](https://github.com/cgranetgithub/dev-factory/actions/workflows/ci.yml/badge.svg)](https://github.com/cgranetgithub/dev-factory/actions/workflows/ci.yml)
+[![Python 3.11 | 3.12 | 3.13](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)](pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 DevFactory runs a sequential SDLC agent pipeline using small local LLMs (via Ollama).
 It watches your GitHub repository for issues labelled `ready-for-dev`, processes them
 one by one through a structured workflow, and opens a reviewed Pull Request — ready for
