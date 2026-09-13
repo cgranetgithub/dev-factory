@@ -65,6 +65,18 @@ Costs to accept: two issues per task — a `devfactory:spec` label and a filter 
 the list readable — and the artifact lives in GitHub rather than in git, which is
 weaker evidence than a commit for an auditor. Recorded in `docs/VISION.md`.
 
+Two rules keep that second issue from becoming a liability of its own:
+
+- **One specification per issue.** The marker `<!-- devfactory:spec-for:N -->` in
+  the body is what identifies it, and the lookup reads the whole issue listing so
+  that a second one is *seen* rather than shadowed. Two of them stop the run and
+  name both, because picking one silently means the developer can build from one
+  spec while a human amends the other.
+- **It closes with the work.** The pull request carries `Closes` for the original
+  issue and for its spec issue, so a merge closes both — and the closing reference
+  is itself the link from the implementation back to the specification. A run that
+  produces no pull request closes nothing, which is correct: the work is not done.
+
 ## The harness is a seam
 
 Every agent reaches its model through one module, `devfactory/opencode.py`: an agent

@@ -1,5 +1,6 @@
 """Tests for KB scorer and database."""
 
+import sqlite3
 import tempfile
 from pathlib import Path
 
@@ -205,3 +206,55 @@ def test_unmeasured_lint_is_not_recorded_as_zero():
     Scorer(database=db).flush(ctx, task_id)
 
     assert _scores_for(db, "lint_left_behind") == []
+
+
+# ── The spec issue in the task row ───────────────────────────────────────────
+
+
+def test_the_task_row_records_which_spec_issue_the_run_built_from():
+    """Part of the evidence chain issue → spec → code → PR: the row says which
+    specification this task was implemented against."""
+    db = make_db()
+    task_id = db.create_task(4, "owner/repo")
+
+    db.update_task(task_id, spec_issue_number=6)
+
+    with db._conn() as conn:
+        row = conn.execute("SELECT spec_issue_number FROM tasks WHERE id=?", (task_id,)).fetchone()
+    assert row["spec_issue_number"] == 6
+
+
+# The tasks table as it stood before spec_issue_number was added to the schema.
+_TASKS_BEFORE_THE_COLUMN = """
+CREATE TABLE tasks (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    github_issue_id INTEGER NOT NULL,
+    repo            TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'pending',
+    branch_name     TEXT,
+    pr_url          TEXT,
+    created_at      TEXT DEFAULT (datetime('now')),
+    completed_at    TEXT
+)
+"""
+
+
+def test_an_existing_database_gains_the_column_on_open():
+    """CREATE TABLE IF NOT EXISTS leaves an existing table alone, so a database
+    written before the column existed has to be brought up to date — keeping its
+    rows, which are the audit trail."""
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    path = Path(tmp.name)
+    before = sqlite3.connect(path)
+    before.execute(_TASKS_BEFORE_THE_COLUMN)
+    before.execute("INSERT INTO tasks (github_issue_id, repo) VALUES (4, 'owner/repo')")
+    before.commit()
+    before.close()
+
+    db = Database(path=path)
+
+    with db._conn() as conn:
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+        kept = conn.execute("SELECT COUNT(*) AS n FROM tasks").fetchone()["n"]
+    assert "spec_issue_number" in columns
+    assert kept == 1, "the pre-existing row is evidence and must survive the upgrade"

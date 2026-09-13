@@ -2,7 +2,7 @@
 GitHub PR creation and management.
 
 Creates a structured PR body including:
-- Link to the originating issue (``Closes #N``)
+- Closing references to the originating issue and to its spec issue (``Closes #N``)
 - Acceptance criteria as checkboxes
 - verification report summary
 - Model assignments used during generation
@@ -95,8 +95,13 @@ def _build_pr_body(ctx: PipelineContext) -> str:
         f"## {ctx.issue.title}",
         "",
         f"Closes #{ctx.issue.number}",
-        "",
-        f"Built from the specification in #{ctx.spec_issue_number}.",
+        # The spec issue closes with the original one, on the same merge. Its work
+        # is done once the implementation lands, and an open issue with nothing
+        # left to do is a wrong record as much as it is noise. The closing
+        # reference is also the traceability link from the implementation back to
+        # the specification it was built from, which is why the sentence stays:
+        # a bare "Closes #N" tells a reader nothing about what #N is.
+        f"Closes #{ctx.spec_issue_number} — the specification this was built from.",
         "",
         "---",
         "",

@@ -48,6 +48,17 @@ class SpecNotPublishedError(RuntimeError):
     """A stage needs the specification and none has been published for the issue."""
 
 
+class AmbiguousSpecError(RuntimeError):
+    """Several issues claim to be the specification for the same original issue.
+
+    Nothing in GitHub enforces one specification per issue, so the factory has to.
+    Picking one of them — whichever the API listed first — degrades silently: the
+    developer can build from one spec while a human amends the other, and the
+    evidence chain issue → spec → code → PR is then broken without anyone seeing
+    it. Louder is safer: the run stops and names them.
+    """
+
+
 def publish_spec(repo: str, issue_number: int, issue_title: str, spec: TaskSpec) -> int:
     """Create or update the spec issue for ``issue_number``. Returns its number.
 
@@ -81,16 +92,48 @@ def publish_spec(repo: str, issue_number: int, issue_title: str, spec: TaskSpec)
 
 
 def find_spec_issue(repo: str, issue_number: int):
-    """Return the existing spec issue for ``issue_number``, or None.
+    """Return the single spec issue for ``issue_number``, or None.
 
     Matches on the marker in the body rather than on the title, because a human is
     expected to edit these and the title is the first thing they will change.
+
+    Raises:
+        AmbiguousSpecError: More than one issue carries the marker. There is no
+            defensible way to choose between them here, so the caller is told
+            which ones exist instead of being handed one of them.
+    """
+    matches = _spec_issues_for(repo, issue_number)
+    if not matches:
+        return None
+    if len(matches) > 1:
+        listed = ", ".join(f"#{m.number}" for m in matches)
+        raise AmbiguousSpecError(
+            f"issue #{issue_number} has {len(matches)} specification issues: {listed}. "
+            f"The factory writes one, and cannot tell which of these is now the "
+            f"specification. Keep one — #{matches[0].number} is the oldest, so most "
+            f"likely the one that has been read and amended — and take the "
+            f"'{LABEL_SPEC}' label and the '{_MARKER.format(number=issue_number)}' "
+            f"marker off the others, then run the issue again."
+        )
+    return matches[0]
+
+
+def _spec_issues_for(repo: str, issue_number: int) -> list:
+    """Every issue carrying the marker for ``issue_number``, lowest number first.
+
+    The whole listing is walked instead of stopping at the first hit: a duplicate
+    is only detectable by looking past the spec that would have been returned.
+    ``get_issues`` answers with a ``PaginatedList``, which fetches the next page
+    when the iteration reaches the end of the current one, so a plain ``for``
+    consumes the listing in full — every page, not just the first.
     """
     marker = _MARKER.format(number=issue_number)
-    for candidate in gh.get_repo(repo).get_issues(state="all", labels=[LABEL_SPEC]):
-        if candidate.body and marker in candidate.body:
-            return candidate
-    return None
+    matches = [
+        candidate
+        for candidate in gh.get_repo(repo).get_issues(state="all", labels=[LABEL_SPEC])
+        if candidate.body and marker in candidate.body
+    ]
+    return sorted(matches, key=lambda candidate: int(candidate.number))
 
 
 def spec_for(ctx: PipelineContext) -> TaskSpec:

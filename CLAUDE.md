@@ -128,7 +128,7 @@ Poller detects label ready-for-dev
            gate 2 — review       : OpenCode read-only, judges against the spec
            any gate can send the change back; all three share one budget
       4. git_ops.push_branch
-      5. create_or_update_pr           — cites the spec issue
+      5. create_or_update_pr           — closes the issue and its spec issue
       6. post the review that governed the accepted iteration
       7. scorer.flush → SQLite KB
   → the pipeline applies the issue's status labels itself, whatever the outcome
